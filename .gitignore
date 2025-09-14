@@ -216,3 +216,6 @@ src_code/results_classifier/
 
 # notebooks
 *.ipynb
+
+# scripts
+*.sh

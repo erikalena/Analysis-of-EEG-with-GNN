@@ -16,8 +16,9 @@ class GCN(torch.nn.Module):
         self.conv1 = GCNConv(num_node_features, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, hidden_channels)
         self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        self.conv4 = GCNConv(hidden_channels, hidden_channels)
         self.lin = Linear(hidden_channels, num_classes)
-
+	
     def forward(self, x, edge_index, batch):
         # 1. Obtain node embeddings
         x = self.conv1(x, edge_index)
@@ -25,7 +26,8 @@ class GCN(torch.nn.Module):
         x = self.conv2(x, edge_index)
         x = x.relu()
         x = self.conv3(x, edge_index)
-
+        x = x.relu()
+        x = self.conv4(x, edge_index)
         # 2. Readout layer
         x = global_mean_pool(x, batch)  # [batch_size, hidden_channels]
 

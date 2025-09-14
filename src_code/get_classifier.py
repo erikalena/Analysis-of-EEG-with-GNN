@@ -39,10 +39,10 @@ class Config:
     input_data: int = None
     checkpoint_path: str = None              # e.g. './results_classifier/resnet18_20231119-152229'
     optimizer: optim = optim.Adam
-    learning_rate: float = 0.001
+    learning_rate: float = 0.01
     loss_fn: nn = nn.CrossEntropyLoss 
-    batch_size: int = 32                   
-    epochs: int = 3               
+    batch_size: int = 128                   
+    epochs: int = 50               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH

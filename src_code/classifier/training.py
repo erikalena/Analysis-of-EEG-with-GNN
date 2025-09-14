@@ -2,6 +2,9 @@ import os
 import numpy as np
 import time
 import torch
+import numpy as np
+import torch.nn as nn
+from sklearn.metrics import precision_score, recall_score
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import torchvision
@@ -180,4 +183,97 @@ def test(model: torchvision.models, loader: DataLoader, folder: str = None):
             f.write(f'Test Acc: {test_acc:.4f}\n')
          
     return test_acc
+
+
+#############
+# train function for EEGCN model
+#############
+
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight)
+        m.bias.data.fill_(0.01)
+
+def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
+    model = model.to(device)
+    model.device = device
+    criterion = criterion.to(device)
+    best_val_accuracy = 0
+    train_loader, val_loader, test_loader = dataloaders["train"], dataloaders["val"], dataloaders["test"]
+    
+    with open(os.path.join(folder, 'results.txt'), 'a') as f:
+        # write header
+        f.write(f'epoch,train_loss,train_acc,val_loss,val_acc\n')
         
+    for epoch in range(epochs):  # loop over the dataset multiple times
+        model.train()
+        running_loss = 0.0
+        val_loss = 0.0
+        for data in train_loader:
+            data = data.to(model.device)
+            inputs = (data.x.float(), data.edge_index, None, data.batch)
+            labels_y = data.y.to(model.device)
+
+            # zero the parameter gradients
+            optim.zero_grad()
+            
+            out_y, grads = model(*inputs)
+            loss_aux = grads.square().mean()
+            loss = criterion(out_y, labels_y) + 1e-3*loss_aux # Compute the loss.
+            loss.backward()
+
+            optim.step()
+
+            running_loss += loss.item()
+        
+        for data in val_loader:
+            data = data.to(model.device)
+            inputs = (data.x.float(), data.edge_index, None, data.batch)
+            labels_y = data.y.to(model.device)
+            out_y, grads = model(*inputs)
+            loss_aux = grads.square().mean()
+            loss = criterion(out_y, labels_y) + 1e-3*loss_aux # Compute the loss.
+            val_loss += loss.item()
+        
+        running_loss = running_loss / len(train_loader)
+        val_loss = val_loss / len(val_loader)
+        val_acc = test_eegcn(model, val_loader)
+        train_acc = test_eegcn(model, train_loader)
+                
+        logger.info(f"Epoch: {epoch}, train accuracy: {train_acc:.2f}, val accuracy: {val_acc:.2f}")
+        logger.info(f"Running loss: {running_loss:.2f}")
+        with open(os.path.join(folder, 'results.txt'), 'a') as f:
+            f.write(f'{epoch},{running_loss},{train_acc:.4f},')
+            f.write(f'{val_loss},{val_acc:.4f}\n')
+    
+    logger.info("Testing the model...")
+    model.eval()
+    test_acc = test_eegcn(model, test_loader)
+    with open(os.path.join(folder, 'results.txt'), 'a') as f:
+            f.write(f'Test Acc: {test_acc:.4f}\n')
+    logger.info(f"Test accuracy: {test_acc:.2f}")
+        
+
+    
+def apply_along_axis(function, x, axis: int = 0):
+     return torch.stack([
+         function(x_i) for x_i in torch.unbind(x, dim=axis)
+     ], dim=axis).to(x.device)
+        
+def test_eegcn(model, loader):
+    model.eval() # set evaluation mode for the model
+    correct = 0
+    
+    for data in loader:  # Iterate in batches over the training/test dataset.
+       
+        data = data.to(model.device)
+        inputs = (data.x.float(), data.edge_index, None, data.batch)
+        labels = data.y.to(model.device)
+        out_y = model(*inputs)
+        pred = out_y.argmax(dim=1)  # Use the class with highest probability.
+        correct += int((pred == labels).sum())  # Check against ground-truth labels.
+       
+    acc = correct / len(loader.dataset)  # Derive ratio of correct predictions.
+
+    return acc 

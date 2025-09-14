@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from utils.utils import logger, load_dataloaders, save_dataloaders
 from utils.read_data import CHANNEL_NAMES, read_eeg_data, build_dataloader, EEGDataset
 from utils.plot_functions import get_confusion_matrix, plot_training_results
-from classifier.models import GCN, get_weights
-from classifier.training import train, test
+from classifier.models import GCN, EEGCN, get_weights
+from classifier.training import train, test, train_eegcn, test_eegcn
 
 
 DATA_FOLDER = '../eeg_data/'            # folder where the dataset is stored
@@ -28,7 +28,7 @@ class Config:
     number_of_subjects: int = 5              # number of subjects to consider
     first_subj: int = 1                      # first subject to consider
     dataset_size: int = 0                    # size of the dataset
-    network_type: str = 'gcn'           # network type (shallownet, resnet18)
+    network_type: str = 'gnn'           
     classification: str = 'ms'               # classification type (cq, ms, both)
     pretrained: bool = False                 # use pretrained model
     nclasses: int = 2                        # number of classes
@@ -42,10 +42,23 @@ class Config:
     learning_rate: float = 0.001
     loss_fn: nn = nn.CrossEntropyLoss 
     batch_size: int = 32                   
-    epochs: int = 10               
+    epochs: int = 3               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
+    n_cnn: int = 3                           # number of 1D convolutions to extract features from a signal, >=2
+    n_mp: int = 1                            # hop distance in graph to collect information from,
+    aggregate: str = 'mean'                  # aggregation method for graph convolution layers
+    d_hidden: int = 60                       # number of hidden channels of graph convolution layers
+    d_latent: int = 90               
+    activation: str = 'tanh'                 # activation function to use, [Leaky ReLU, ReLU, Tanh]
+    pooling: str = 'max'                     # pooling strategy to use, [Max, Average]
+    kernel_size: int = 30                    # kernel size for the 1D convolutions
+    norm_enc: int = 1                        # whether to use batch normalization after each 1D convolution (1) or not (0)
+    norm_proc: str = 'graph'                 # normalization for the processing layers, [none, batch, graph, layer]
+    p_dropout: float = 0.0                   # dropout probability
+    normalization: str = 'minmax'            # normalization for the input data
+    key: int = 0                             # key to identify the model
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     def save_config(self, file_path):
@@ -98,33 +111,38 @@ def run(dataset: EEGDataset):
     # load model
     if CONFIG.classification in ['ms', 'cq']:
         num_classes = 2
-        model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
     else:
         num_classes = 3
+        
+    if CONFIG.network_type == 'gnn':
         model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
+    else:
+        model = EEGCN(CONFIG)
 
     # define loss function and optimizer
     class_weights = get_weights(dataset, CONFIG.nclasses)
     loss_fn = CONFIG.loss_fn(weight=class_weights, reduction='mean')
     logger.info(f'Weights for each class: {class_weights}')
-
-    logger.info("Training the model...")
     optimizer = CONFIG.optimizer(model.parameters(), lr=CONFIG.learning_rate)
     
     # train model
     logger.info("Training the model...")
     file_checkpoint = CONFIG.checkpoint_path + '/checkpoint.pt' if CONFIG.checkpoint_path is not None else None
     load = True if CONFIG.checkpoint_path is not None and os.path.isfile(file_checkpoint) else False
-    model = train(model, optimizer, loss_fn, dataloaders, num_epochs=CONFIG.epochs, 
-                        folder=CONFIG.dir_path, load_checkpoint=load, 
-                        checkpoint_path=file_checkpoint, device=CONFIG.device)
+    if CONFIG.network_type == 'gnn':
+        model = train(model, optimizer, loss_fn, dataloaders, num_epochs=CONFIG.epochs, 
+                            folder=CONFIG.dir_path, load_checkpoint=load, 
+                            checkpoint_path=file_checkpoint, device=CONFIG.device)
+        # test the model
+        logger.info("Testing the model...")
+        test_acc = test(model, testloader, folder = CONFIG.dir_path)
+        logger.info(f'Test accuracy: {test_acc}')
+    else:
+        model = train_eegcn(model, optimizer, dataloaders, loss_fn, CONFIG.device, CONFIG.epochs, folder=CONFIG.dir_path)
 
     plot_training_results(f'{CONFIG.dir_path}/results.txt')
 
-    # test the model
-    logger.info("Testing the model...")
-    test_acc = test(model, testloader, folder = CONFIG.dir_path)
-    logger.info(f'Test accuracy: {test_acc}')
+    
 
 
 
@@ -132,18 +150,29 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-ns', '--number_of_subjects', type=int, default=2, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='resnet18', help='network type (shallownet, resnet18)')
+    parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
     parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
     parser.add_argument('-cp', '--checkpoint_path', type=str, default=None, help='path to the checkpoint to load')
     #parser.add_argument('-tw', '--timewindow', type=int, default=1, help='time window for the spectrogram')
-
+    parser.add_argument('--n_cnn', type=int, default=3, help='Number of 1D convolutions to extract features from a signal, >=2')
+    parser.add_argument('--n_mp', type=int, default=1, help='Hop distance in graph to collect information from, >=1')
+    parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
+    parser.add_argument('--d_hidden', type=int, default=60, help='Number of hidden channels of graph convolution layers')
+    parser.add_argument('--d_latent', type=int, default=90, help='Number of features to extract from a EEG signal')
+    parser.add_argument('--activation', type=str, default='tanh', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
+    parser.add_argument('--pooling', type=str, default='max', choices=['max', 'avg'], help='Pooling strategy to use, [Max, Average]')
+    parser.add_argument('--kernel_size', type=int, default=30)
+    parser.add_argument('--norm_enc', type=int, default=1, choices=[0,1],)
+    parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
+    parser.add_argument('--p_dropout', type=float, default=0., help='Dropout probability')
+    parser.add_argument('--normalization', type=str, default='minmax', choices=['minmax', 's', 'z', 'f'],)
+    parser.add_argument('--key', type=int, default=0)
     args = parser.parse_args()
     args.network_type = args.network_type.lower()
 
     # check that configuration parameters are consistent
-    assert args.network_type in ['shallownet', 'resnet18'], "network type must be either shallowNet or resnet18"
     assert args.input_channels == len(args.channels) or args.input_channels == 1, "Error: number of input channels must be equal to the number of channels or 1 if each channel is used as a separate input"
 
     # set the number of classes

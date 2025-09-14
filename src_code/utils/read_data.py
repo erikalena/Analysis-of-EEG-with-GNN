@@ -359,13 +359,16 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     
     min_spectr = np.min([torch.min(torch.abs(dataset_tmp[i][0])) for i in range(len(dataset_tmp))])
     max_spectr = np.max([torch.max(torch.abs(dataset_tmp[i][0])) for i in range(len(dataset_tmp))])
-
-    # normalize spectrograms
+    min_raw = np.min([torch.min(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
+    max_raw = np.max([torch.max(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
+    
+    # normalize spectrograms and raw data
     for idx, _ in enumerate(dataset):
         spectrogram = torch.abs(dataset_tmp.spectrograms[idx])
+        #raw = dataset_tmp.raw[idx]
         dataset_tmp.spectrograms[idx] = (spectrogram - min_spectr) / (max_spectr - min_spectr)
-        dataset_tmp.x[idx] = dataset_tmp.spectrograms[idx]
- 
+        #dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
+        
     train_idx, valid_idx, test_idx = torch.utils.data.random_split(
         range(len(dataset_tmp)), [train_size, valid_size, test_size]
     )
@@ -421,7 +424,8 @@ def prepare_graph_data(indices, dataset):
         else:
             logger.error(f"Spectrogram not found: {idx}")
             
-        raw = dataset.raw[idx]
+        raw = torch.tensor(dataset.raw[idx]).float()
+        logger.info(f"Raw shape: {raw.shape}")
         y = dataset.labels[idx]
         edge_index = dataset.edge_index[idx]
        
@@ -429,7 +433,7 @@ def prepare_graph_data(indices, dataset):
         
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            x=x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
+            x=raw, #x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
             raw=raw,  # Custom attribute for raw data
             y=y,
             edge_index=edge_index

@@ -28,7 +28,7 @@ class Config:
     number_of_subjects: int = 5              # number of subjects to consider
     first_subj: int = 1                      # first subject to consider
     dataset_size: int = 0                    # size of the dataset
-    network_type: str = 'gcn'           # network type (shallownet, resnet18)
+    network_type: str = 'gcn'           
     classification: str = 'ms'               # classification type (cq, ms, both)
     pretrained: bool = False                 # use pretrained model
     nclasses: int = 2                        # number of classes
@@ -39,10 +39,10 @@ class Config:
     input_data: int = None
     checkpoint_path: str = None              # e.g. './results_classifier/resnet18_20231119-152229'
     optimizer: optim = optim.Adam
-    learning_rate: float = 0.001
+    learning_rate: float = 0.01
     loss_fn: nn = nn.CrossEntropyLoss 
-    batch_size: int = 32                   
-    epochs: int = 10               
+    batch_size: int = 128                   
+    epochs: int = 50               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
@@ -98,7 +98,7 @@ def run(dataset: EEGDataset):
     # load model
     if CONFIG.classification in ['ms', 'cq']:
         num_classes = 2
-        model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
+        model = GCN(num_node_features, num_classes=num_classes, hidden_channels=128)
     else:
         num_classes = 3
         model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
@@ -131,8 +131,8 @@ def run(dataset: EEGDataset):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ns', '--number_of_subjects', type=int, default=2, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='resnet18', help='network type (shallownet, resnet18)')
+    parser.add_argument('-ns', '--number_of_subjects', type=int, default=36, help='number of subjects for which the correlation is computed')
+    parser.add_argument('-nt', '--network_type', type=str, default='gnn', help='network type (shallownet, resnet18)')
     parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
@@ -143,7 +143,6 @@ if __name__ == "__main__":
     args.network_type = args.network_type.lower()
 
     # check that configuration parameters are consistent
-    assert args.network_type in ['shallownet', 'resnet18'], "network type must be either shallowNet or resnet18"
     assert args.input_channels == len(args.channels) or args.input_channels == 1, "Error: number of input channels must be equal to the number of channels or 1 if each channel is used as a separate input"
 
     # set the number of classes

@@ -6,6 +6,7 @@ import copy
 import pickle
 import scipy
 import torch
+import matplotlib.pyplot as plt
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from neurodsp.timefrequency.wavelets import compute_wavelet_transform
@@ -256,8 +257,9 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
                         continue
                     sample = data.get_data(i)[0]
                     eeg_data = sample[j*segment_length:(j+1)*segment_length] 
-                   
-                    raw_eeg.append(eeg_data)
+                    #raw_eeg.append(eeg_data)
+                    fft = np.fft.fft(eeg_data)[:200]
+                    raw_eeg.append(np.abs(fft))
 
                     if save_spec:
                         freqs = np.arange(0.5, 60, 2)
@@ -352,6 +354,7 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
         spectrograms[idx] = torch.tensor(dataset_tmp.spectrograms[idx].real).float() if len(dataset_tmp.spectrograms) > 0  else dataset_tmp.spectrograms[idx]
         raw[idx] = torch.tensor(np.array(dataset_tmp.raw[idx])).float() 
         labels[idx] = torch.tensor(dataset_tmp.labels[idx]).long() 
+        
     
     dataset_tmp.spectrograms = spectrograms
     dataset_tmp.raw = raw
@@ -365,9 +368,20 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     # normalize spectrograms and raw data
     for idx, _ in enumerate(dataset):
         spectrogram = torch.abs(dataset_tmp.spectrograms[idx])
-        #raw = dataset_tmp.raw[idx]
+        raw = dataset_tmp.raw[idx]
         dataset_tmp.spectrograms[idx] = (spectrogram - min_spectr) / (max_spectr - min_spectr)
-        #dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
+        dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
+        
+        if idx == 0:
+            logger.info(f"Shape of raw data after FFT: {raw[idx].shape}")
+            logger.info(f"Label of the first data point: {labels[idx]}")
+            plt.figure()
+            plt.plot(dataset_tmp.raw[idx][0])
+            plt.title(f"Raw EEG data - Label: {labels[idx].item()}")
+            plt.xlabel("Frequency (Hz)")
+            plt.ylabel("Amplitude")
+            plt.savefig("raw_eeg_example.png")
+            plt.close()
         
     train_idx, valid_idx, test_idx = torch.utils.data.random_split(
         range(len(dataset_tmp)), [train_size, valid_size, test_size]
@@ -433,7 +447,7 @@ def prepare_graph_data(indices, dataset):
         
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            x=raw, #x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
+            x=raw, #.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
             raw=raw,  # Custom attribute for raw data
             y=y,
             edge_index=edge_index

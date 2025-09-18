@@ -103,7 +103,7 @@ def train(model: torchvision.models, optimizer: torch.optim, criterion: torch.nn
             else:
                 model.eval()   
 
-            running_loss = 0.0
+            train_loss = 0.0
             size = 0
             
             for data in dataloaders[phase]:
@@ -119,14 +119,14 @@ def train(model: torchvision.models, optimizer: torch.optim, criterion: torch.nn
                         loss.backward()
                         optimizer.step()
                     
-                    running_loss += loss.item() * data.num_graphs
+                    train_loss += loss.item() * data.num_graphs
                 
             if phase == 'train':
                 scheduler.step()
 
             # statistics
             epoch_acc = test(model, dataloaders[phase], folder=None)
-            epoch_loss = running_loss / size
+            epoch_loss = train_loss / size
             logger.info(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
             # deep copy the model
@@ -208,8 +208,9 @@ def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
         
     for epoch in range(epochs):  # loop over the dataset multiple times
         model.train()
-        running_loss = 0.0
-        val_loss = 0.0
+        train_acc, train_loss, val_acc, val_loss = 0., 0., 0., 0.
+        model.train()
+
         for data in train_loader:
             data = data.to(model.device)
             inputs = (data.x.float(), data.edge_index, None, data.batch)
@@ -219,32 +220,56 @@ def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
             optim.zero_grad()
             
             out_y, grads = model(*inputs)
+            pred = out_y.argmax(dim=1)  # Use the class with highest probability.
+            train_acc += int((pred == labels_y).sum())
             loss_aux = grads.square().mean()
-            loss = criterion(out_y, labels_y) + 1e-3*loss_aux # Compute the loss.
+            loss = criterion(out_y, labels_y) + 1e-3*loss_aux 
             loss.backward()
 
             optim.step()
 
-            running_loss += loss.item()
+            train_loss += loss.item()
         
+        model.eval()  # Before validation
+        with torch.no_grad():
+            for data in val_loader:
+                data = data.to(model.device)
+                inputs = (data.x.float(), data.edge_index, None, data.batch)
+                labels_y = data.y.to(model.device)
+                out_y = model(*inputs)
+                pred = out_y.argmax(dim=1)  
+                val_acc += int((pred == labels_y).sum())
+                loss = criterion(out_y, labels_y) 
+                val_loss += loss.item()
+        """
+        def bn_train_eval(model):
+            model.eval()
+            for m in model.modules():
+                if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+                    m.train()  # BN uses batch stats; dropout etc. remain disabled
+
+        # before measuring validation acc
+        bn_train_eval(model) #if epoch < 20 else model.eval()
         for data in val_loader:
             data = data.to(model.device)
             inputs = (data.x.float(), data.edge_index, None, data.batch)
             labels_y = data.y.to(model.device)
-            out_y, grads = model(*inputs)
-            loss_aux = grads.square().mean()
-            loss = criterion(out_y, labels_y) + 1e-3*loss_aux # Compute the loss.
+            out_y = model(*inputs)
+            pred = out_y.argmax(dim=1)  
+            val_acc += int((pred == labels_y).sum())
+            loss = criterion(out_y, labels_y) 
             val_loss += loss.item()
-        
-        running_loss = running_loss / len(train_loader)
+        """
+
+        train_loss = train_loss / len(train_loader)
         val_loss = val_loss / len(val_loader)
-        val_acc = test_eegcn(model, val_loader)
-        train_acc = test_eegcn(model, train_loader)
-                
+        train_acc = train_acc / len(train_loader.dataset)
+        val_acc = val_acc / len(val_loader.dataset)
+        logger.info(f"{len(train_loader)}, {len(val_loader)}")        
         logger.info(f"Epoch: {epoch}, train accuracy: {train_acc:.2f}, val accuracy: {val_acc:.2f}")
-        logger.info(f"Running loss: {running_loss:.2f}")
+        logger.info(f"Train loss: {train_loss:.2f}, lr: {optim.param_groups[0]['lr']}")
         with open(os.path.join(folder, 'results.txt'), 'a') as f:
-            f.write(f'{epoch},{running_loss},{train_acc:.4f},')
+            f.write(f'{epoch},{train_loss},{train_acc:.4f},')
             f.write(f'{val_loss},{val_acc:.4f}\n')
     
     logger.info("Testing the model...")
@@ -263,16 +288,22 @@ def apply_along_axis(function, x, axis: int = 0):
         
 def test_eegcn(model, loader):
     model.eval() # set evaluation mode for the model
+    def bn_train_eval(model):
+        model.eval()
+        for m in model.modules():
+            if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+               m.eval()  # BN uses batch stats; dropout etc. remain disabled
+    bn_train_eval(model)
     correct = 0
-    
-    for data in loader:  # Iterate in batches over the training/test dataset.
-       
-        data = data.to(model.device)
-        inputs = (data.x.float(), data.edge_index, None, data.batch)
-        labels = data.y.to(model.device)
-        out_y = model(*inputs)
-        pred = out_y.argmax(dim=1)  # Use the class with highest probability.
-        correct += int((pred == labels).sum())  # Check against ground-truth labels.
+
+    with torch.no_grad():
+        for data in loader:  # Iterate in batches over the training/test dataset
+            data = data.to(model.device)
+            inputs = (data.x.float(), data.edge_index, None, data.batch)
+            labels = data.y.to(model.device)
+            out_y = model(*inputs)
+            pred = out_y.argmax(dim=1)  # Use the class with highest probability.
+            correct += int((pred == labels).sum())  # Check against ground-truth labels.
        
     acc = correct / len(loader.dataset)  # Derive ratio of correct predictions.
 

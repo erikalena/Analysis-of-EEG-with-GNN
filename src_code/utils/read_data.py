@@ -7,8 +7,10 @@ import pickle
 import scipy
 import torch
 import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
+import torch.nn.functional as F
 from neurodsp.timefrequency.wavelets import compute_wavelet_transform
 from utils.utils import logger
 
@@ -307,10 +309,18 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
         
     return dataset
     
+def group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids):
+    """
+    Return indices for train, validation, and test sets based on user IDs
+    """
+    train_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in train_ids]
+    valid_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in valid_ids]
+    test_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in test_ids]
+    return train_idx, valid_idx, test_idx
+    
 
 
-
-def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train_rate: float = 0.8, valid_rate: float = 0.1, shuffle: bool = True, resample: bool = False) -> tuple:
+def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train_rate: float = 0.8, valid_rate: float = 0.1, shuffle: bool = True, resample: bool = False, normalization: str = 'minmax') -> tuple:
     """
     A function which provides all the dataloaders needed for training, validation and testing
     Input:
@@ -327,12 +337,12 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
         validloader: a dataloader for validation
         testloader: a dataloader for testing
     """
-
+    """
     # build trainloader
     train_size = int(train_rate * len(dataset))
     valid_size = int(valid_rate * len(dataset))
     test_size = len(dataset) - train_size - valid_size
-
+    """
     # before loading data into dataloader, normalize the data
     dataset_tmp = copy.deepcopy(dataset)
 
@@ -368,9 +378,9 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     # normalize spectrograms and raw data
     for idx, _ in enumerate(dataset):
         spectrogram = torch.abs(dataset_tmp.spectrograms[idx])
-        raw = dataset_tmp.raw[idx]
+        #raw = dataset_tmp.raw[idx]
         dataset_tmp.spectrograms[idx] = (spectrogram - min_spectr) / (max_spectr - min_spectr)
-        dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
+        #dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
         
         if idx == 0:
             logger.info(f"Shape of raw data after FFT: {raw[idx].shape}")
@@ -382,26 +392,34 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
             plt.ylabel("Amplitude")
             plt.savefig("raw_eeg_example.png")
             plt.close()
-        
+    """    
     train_idx, valid_idx, test_idx = torch.utils.data.random_split(
         range(len(dataset_tmp)), [train_size, valid_size, test_size]
     )
+    """
+    test_rate = round(1 - train_rate - valid_rate, 2)
+    user_ids = [id[0].split('_')[0] for id in dataset_tmp.id]
+    
+    unique_ids = list(set(user_ids))  # Get unique IDs
+    train_ids, temp_ids = train_test_split(unique_ids, test_size=round(1-train_rate,2), random_state=42)  # 60% train, 40% temp
+    valid_ids, test_ids = train_test_split(temp_ids, test_size=test_rate, random_state=42)
+    train_idx, valid_idx, test_idx = group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids)
 
     # Prepare data for each split
-    train_data_list = prepare_graph_data(train_idx, dataset)
+    train_data_list = prepare_graph_data(train_idx, dataset, normalization)
 
     valid_data_list = []
-    if valid_size > 0:
-        valid_data_list = prepare_graph_data(valid_idx, dataset)
+    if valid_rate > 0:
+        valid_data_list = prepare_graph_data(valid_idx, dataset, normalization)
 
     test_data_list = []
-    if test_size > 0:
-        test_data_list = prepare_graph_data(test_idx, dataset)
+    if test_rate > 0:
+        test_data_list = prepare_graph_data(test_idx, dataset, normalization)
 
     # Create PyTorch Geometric DataLoaders
     trainloader = DataLoader(train_data_list, batch_size=batch_size, shuffle=shuffle)
-    validloader = DataLoader(valid_data_list, batch_size=batch_size, shuffle=shuffle) if valid_size > 0 else None
-    testloader = DataLoader(test_data_list, batch_size=batch_size, shuffle=shuffle) if test_size > 0 else None
+    validloader = DataLoader(valid_data_list, batch_size=batch_size, shuffle=shuffle) if valid_rate > 0 else None
+    testloader = DataLoader(test_data_list, batch_size=batch_size, shuffle=shuffle) if test_rate > 0 else None
 
     # Test the dataloader
     logger.info(f"Individual data object x shape: {train_data_list[0].x.shape if train_data_list[0].x is not None else 'None'}")
@@ -416,7 +434,7 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     return trainloader, validloader, testloader
 
 
-def prepare_graph_data(indices, dataset):
+def prepare_graph_data(indices, dataset, normalization):
     """
     Prepare data as PyTorch Geometric Data objects
     """
@@ -439,12 +457,19 @@ def prepare_graph_data(indices, dataset):
             logger.error(f"Spectrogram not found: {idx}")
             
         raw = torch.tensor(dataset.raw[idx]).float()
-        logger.info(f"Raw shape: {raw.shape}")
         y = dataset.labels[idx]
         edge_index = dataset.edge_index[idx]
        
         assert x.dim() == 3, f"Expected 3D tensor, got {x.dim()}D"
         
+        if normalization == 'minmax':
+            x = (raw - raw.min()) / (raw.max() - raw.min())
+        elif normalization == 'z':
+            x = ((raw - raw.mean())/raw.std())
+        elif normalization == 's':
+            x = ((raw - raw.mean(-1).unsqueeze(1))/raw.std(-1).unsqueeze(1))
+        elif normalization == 'f':
+            x = F.normalize(raw.x)
         # Create PyTorch Geometric Data object
         data_obj = Data(
             x=raw, #.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]

@@ -66,9 +66,7 @@ class Encoder(torch.nn.Module):
         self.dropout = nn.Dropout(args.p_dropout)
         
     def forward(self, x):
-        print(x.shape)
         z = x.unsqueeze(1)
-        print(z.shape)
         for i, conv in enumerate(self.convs):
             z = conv(z)
             if i == 0 or i == (len(self.convs)-1):

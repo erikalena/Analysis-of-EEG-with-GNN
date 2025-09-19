@@ -455,7 +455,8 @@ def prepare_graph_data(indices, dataset, normalization):
                 x = torch.tensor(spec).float()
         else:
             logger.error(f"Spectrogram not found: {idx}")
-            
+           
+        spec = torch.tensor(dataset.spectrograms[idx]).float()  
         raw = torch.tensor(dataset.raw[idx]).float()
         y = dataset.labels[idx]
         edge_index = dataset.edge_index[idx]
@@ -470,9 +471,11 @@ def prepare_graph_data(indices, dataset, normalization):
             x = ((raw - raw.mean(-1).unsqueeze(1))/raw.std(-1).unsqueeze(1))
         elif normalization == 'f':
             x = F.normalize(raw.x)
+            
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            x=raw, #.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
+            #x=x, 
+            x = x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
             raw=raw,  # Custom attribute for raw data
             y=y,
             edge_index=edge_index

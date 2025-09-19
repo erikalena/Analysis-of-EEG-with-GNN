@@ -8,10 +8,11 @@ from sklearn.metrics import precision_score, recall_score
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import torchvision
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader
 from utils.utils import logger
 
-LEARNING_RATE = 0.001
+
+LEARNNING_RATE = 0.001
 STEP_SIZE = 7
 GAMMA = 0.1
 
@@ -75,8 +76,7 @@ def train(model: torchvision.models, optimizer: torch.optim, criterion: torch.nn
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(device)
     criterion = criterion.to(device)
-    logger.info(f'Criterion: {criterion}')
-    logger.info(f'Optimizer: {optimizer}')
+
     # move model parameters to device
     model = model.to(device)
     model.device = device
@@ -144,11 +144,12 @@ def train(model: torchvision.models, optimizer: torch.optim, criterion: torch.nn
                 else:
                     f.write(f'{epoch_loss},{epoch_acc:.4f}\n')
             
-            # check if we need to early stop
-            if early_stopper.early_stop(epoch_loss, epoch):
-                with open(os.path.join(folder, 'results.txt'), 'a') as f:
-                    f.write('Early stopping\n')
-                break
+            if phase == 'val':
+                # check if we need to early stop
+                if early_stopper.early_stop(epoch_loss, epoch):
+                    with open(os.path.join(folder, 'results.txt'), 'a') as f:
+                        f.write('\nEarly stopping\n')
+                    break
         
     time_elapsed = time.time() - since
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
@@ -185,9 +186,9 @@ def test(model: torchvision.models, loader: DataLoader, folder: str = None):
     return test_acc
 
 
-#############
+#################################
 # train function for EEGCN model
-#############
+#################################
 
 
 def init_weights(m):
@@ -195,13 +196,25 @@ def init_weights(m):
         torch.nn.init.xavier_uniform_(m.weight)
         m.bias.data.fill_(0.01)
 
-def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
+def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch.optim, criterion: torch.nn, epochs: int, device: str ="cpu", folder: str = None):
+    """
+    EEGCN model training
+    Input:
+    - model: model instance to be trained
+    - dataloaders: list for train, valid and test dataloaders
+    - optim: chosen optimzer to adjust network's parameters
+    - criterion: loss function to be used as evaluation
+    - epochs: number of epochs required for training
+    - device: on which device to move model and data before training
+    - folder: path where to save results
+    """
     model = model.to(device)
     model.device = device
     criterion = criterion.to(device)
-    best_val_accuracy = 0
     train_loader, val_loader, test_loader = dataloaders["train"], dataloaders["val"], dataloaders["test"]
     
+    early_stopper = EarlyStopper(patience=10, min_delta=0.001)
+
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
         # write header
         f.write(f'epoch,train_loss,train_acc,val_loss,val_acc\n')
@@ -260,7 +273,7 @@ def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
             loss = criterion(out_y, labels_y) 
             val_loss += loss.item()
         """
-
+        
         train_loss = train_loss / len(train_loader)
         val_loss = val_loss / len(val_loader)
         train_acc = train_acc / len(train_loader.dataset)
@@ -271,6 +284,12 @@ def train_eegcn(model, optim, dataloaders, criterion, device, epochs, folder):
         with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'{epoch},{train_loss},{train_acc:.4f},')
             f.write(f'{val_loss},{val_acc:.4f}\n')
+            
+        # check if we need to early stop
+        if early_stopper.early_stop(val_loss, epoch):
+            with open(os.path.join(folder, 'results.txt'), 'a') as f:
+                f.write('Early stopping\n')
+            break
     
     logger.info("Testing the model...")
     model.eval()

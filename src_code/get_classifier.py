@@ -42,7 +42,7 @@ class Config:
     learning_rate: float = 1e-3
     loss_fn: nn = nn.CrossEntropyLoss 
     batch_size: int = 256                
-    epochs: int = 150               
+    epochs: int = 50               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
@@ -93,7 +93,6 @@ def run(dataset: EEGDataset):
     else:
         trainloader, validloader, testloader = build_dataloader(dataset, batch_size=CONFIG.batch_size, graph_path=CONFIG.graph_path, train_rate=CONFIG.train_rate, 
                                                                 valid_rate=CONFIG.valid_rate, shuffle=True, resample=False, normalization=CONFIG.normalization) 
-        logger.info(next(iter(trainloader)).x[0])
     dataloaders = {'train': trainloader, 'val': validloader, 'test': testloader}
     
     # get the first batch of the trainloader and print some information
@@ -138,7 +137,7 @@ def run(dataset: EEGDataset):
         test_acc = test(model, testloader, folder = CONFIG.dir_path)
         logger.info(f'Test accuracy: {test_acc}')
     else:
-        model = train_eegcn(model, optimizer, dataloaders, loss_fn, CONFIG.device, CONFIG.epochs, folder=CONFIG.dir_path)
+        model = train_eegcn(model, dataloaders, optimizer, loss_fn, CONFIG.epochs, CONFIG.device, folder=CONFIG.dir_path)
 
     plot_training_results(f'{CONFIG.dir_path}/results.txt')
 
@@ -149,18 +148,17 @@ def run(dataset: EEGDataset):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ns', '--number_of_subjects', type=int, default=36, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
-    parser.add_argument('-ct', '--classification', type=str, default='cq', help='classification type (cq, ms, both)')
+    parser.add_argument('-ns', '--number_of_subjects', type=int, default=6, help='number of subjects for which the correlation is computed')
+    parser.add_argument('-nt', '--network_type', type=str, default='gnn', help='network type (shallownet, resnet18)')
+    parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
     parser.add_argument('-cp', '--checkpoint_path', type=str, default=None, help='path to the checkpoint to load')
-    #parser.add_argument('-tw', '--timewindow', type=int, default=1, help='time window for the spectrogram')
     parser.add_argument('--n_cnn', type=int, default=4, help='Number of 1D convolutions to extract features from a signal, >=2')
     parser.add_argument('--n_mp', type=int, default=3, help='Hop distance in graph to collect information from, >=1')
     parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
     parser.add_argument('--d_hidden', type=int, default=64, help='Number of hidden channels of graph convolution layers')
-    parser.add_argument('--d_latent', type=int, default=200, help='Number of features to extract from a EEG signal')
+    parser.add_argument('--d_latent', type=int, default=100, help='Number of features to extract from a EEG signal')
     parser.add_argument('--activation', type=str, default='relu', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
     parser.add_argument('--pooling', type=str, default='max', choices=['max', 'avg'], help='Pooling strategy to use, [Max, Average]')
     parser.add_argument('--kernel_size', type=int, default=30)
@@ -188,17 +186,6 @@ if __name__ == "__main__":
                             number_of_subjects=CONFIG.number_of_subjects, type = CONFIG.classification, 
                             channel_list = CONFIG.channels, time_window = CONFIG.timewindow)
     
-    
-    # add a certain number of samples (all zeros) to the dataset with label 2 (fictitious class)
-    """ for i in range(1000):
-        dataset.spectrograms.append(np.zeros(dataset.spectrograms[0].shape))
-        dataset.labels.append(2)
-        dataset.raw = list(dataset.raw)
-        dataset.raw.append(np.zeros(dataset.raw[0].shape))
-        dataset.channel.append(list(dataset.channel[0]))
-        dataset.id.append(list(dataset.id[0]))
-        dataset.edge_index.append(list(dataset.edge_index[0]))
-        CONFIG.nclasses = 3 """
         
     CONFIG.dataset_size = len(dataset)
     logger.info(dataset.spectrograms[0].shape)

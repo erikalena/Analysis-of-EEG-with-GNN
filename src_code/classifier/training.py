@@ -242,7 +242,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
             optim.step()
 
             train_loss += loss.item()
-        
+        """
         model.eval()  # Before validation
         with torch.no_grad():
             for data in val_loader:
@@ -272,7 +272,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
             val_acc += int((pred == labels_y).sum())
             loss = criterion(out_y, labels_y) 
             val_loss += loss.item()
-        """
+        
         
         train_loss = train_loss / len(train_loader)
         val_loss = val_loss / len(val_loader)

@@ -41,8 +41,8 @@ class Config:
     optimizer: optim = optim.AdamW
     learning_rate: float = 1e-3
     loss_fn: nn = nn.CrossEntropyLoss 
-    batch_size: int = 256                
-    epochs: int = 50               
+    batch_size: int = 16                
+    epochs: int = 5               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
@@ -92,7 +92,7 @@ def run(dataset: EEGDataset):
         trainloader, validloader, testloader = dataloaders['train'], dataloaders['val'], dataloaders['test']
     else:
         trainloader, validloader, testloader = build_dataloader(dataset, batch_size=CONFIG.batch_size, graph_path=CONFIG.graph_path, train_rate=CONFIG.train_rate, 
-                                                                valid_rate=CONFIG.valid_rate, shuffle=True, resample=False, normalization=CONFIG.normalization) 
+                                                                valid_rate=CONFIG.valid_rate, shuffle=True, resample=False, normalization=CONFIG.normalization, folder=CONFIG.dir_path) 
     dataloaders = {'train': trainloader, 'val': validloader, 'test': testloader}
     
     # get the first batch of the trainloader and print some information
@@ -149,13 +149,13 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-ns', '--number_of_subjects', type=int, default=6, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='gnn', help='network type (shallownet, resnet18)')
+    parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
     parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
     parser.add_argument('-cp', '--checkpoint_path', type=str, default=None, help='path to the checkpoint to load')
     parser.add_argument('--n_cnn', type=int, default=4, help='Number of 1D convolutions to extract features from a signal, >=2')
-    parser.add_argument('--n_mp', type=int, default=3, help='Hop distance in graph to collect information from, >=1')
+    parser.add_argument('--n_mp', type=int, default=4, help='Hop distance in graph to collect information from, >=1')
     parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
     parser.add_argument('--d_hidden', type=int, default=64, help='Number of hidden channels of graph convolution layers')
     parser.add_argument('--d_latent', type=int, default=100, help='Number of features to extract from a EEG signal')
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     parser.add_argument('--kernel_size', type=int, default=30)
     parser.add_argument('--norm_enc', type=int, default=1, choices=[0,1],)
     parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
-    parser.add_argument('--p_dropout', type=float, default=0., help='Dropout probability')
+    parser.add_argument('--p_dropout', type=float, default=0.2, help='Dropout probability')
     parser.add_argument('--normalization', type=str, default='minmax', choices=['minmax', 's', 'z', 'f'],)
     args = parser.parse_args()
     args.network_type = args.network_type.lower()

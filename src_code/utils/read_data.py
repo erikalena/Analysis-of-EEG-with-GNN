@@ -249,7 +249,8 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
             segment_length = int(fs/factor) 
             n_segments = int(factor*RECORDING_LENGTH) # number of segments in the recording
 
-            for j in range(n_segments):
+            for j in range(int(n_segments/2)):
+                j = j*2
                 img_eeg = []
                 raw_eeg = []
                 identifiers = []
@@ -260,7 +261,7 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
                     sample = data.get_data(i)[0]
                     eeg_data = sample[j*segment_length:(j+1)*segment_length] 
                     #raw_eeg.append(eeg_data)
-                    fft = np.fft.fft(eeg_data)[:200]
+                    fft = np.fft.fft(eeg_data)[:80]
                     raw_eeg.append(np.abs(fft))
 
                     if save_spec:
@@ -309,18 +310,22 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
         
     return dataset
     
-def group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids):
+def group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids, folder):
     """
     Return indices for train, validation, and test sets based on user IDs
     """
     train_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in train_ids]
     valid_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in valid_ids]
     test_idx = [i for i, id in enumerate(dataset_tmp.id) if id[0].split('_')[0] in test_ids]
+    with open(os.path.join(folder, 'config.txt'), 'a') as f:
+        f.write(f'TRAIN {train_ids}')
+        f.write(f'VAL {valid_ids}')
+        f.write(f'TEST {test_ids}')
+
     return train_idx, valid_idx, test_idx
     
 
-
-def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train_rate: float = 0.8, valid_rate: float = 0.1, shuffle: bool = True, resample: bool = False, normalization: str = 'minmax') -> tuple:
+def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train_rate: float = 0.8, valid_rate: float = 0.1, shuffle: bool = True, resample: bool = False, normalization: str = 'minmax', folder: str = None) -> tuple:
     """
     A function which provides all the dataloaders needed for training, validation and testing
     Input:
@@ -337,12 +342,7 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
         validloader: a dataloader for validation
         testloader: a dataloader for testing
     """
-    """
-    # build trainloader
-    train_size = int(train_rate * len(dataset))
-    valid_size = int(valid_rate * len(dataset))
-    test_size = len(dataset) - train_size - valid_size
-    """
+   
     # before loading data into dataloader, normalize the data
     dataset_tmp = copy.deepcopy(dataset)
 
@@ -372,9 +372,9 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     
     min_spectr = np.min([torch.min(torch.abs(dataset_tmp[i][0])) for i in range(len(dataset_tmp))])
     max_spectr = np.max([torch.max(torch.abs(dataset_tmp[i][0])) for i in range(len(dataset_tmp))])
-    min_raw = np.min([torch.min(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
-    max_raw = np.max([torch.max(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
-    
+    min_raw = np.median([torch.min(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
+    max_raw = np.median([torch.max(torch.abs(dataset_tmp[i][1])) for i in range(len(dataset_tmp))])
+    print("MIN: ", min_raw, " MAX: ", max_raw)
     # normalize spectrograms and raw data
     for idx, _ in enumerate(dataset):
         spectrogram = torch.abs(dataset_tmp.spectrograms[idx])
@@ -382,16 +382,7 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
         dataset_tmp.spectrograms[idx] = (spectrogram - min_spectr) / (max_spectr - min_spectr)
         #dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
         
-        if idx == 0:
-            logger.info(f"Shape of raw data after FFT: {raw[idx].shape}")
-            logger.info(f"Label of the first data point: {labels[idx]}")
-            plt.figure()
-            plt.plot(dataset_tmp.raw[idx][0])
-            plt.title(f"Raw EEG data - Label: {labels[idx].item()}")
-            plt.xlabel("Frequency (Hz)")
-            plt.ylabel("Amplitude")
-            plt.savefig("raw_eeg_example.png")
-            plt.close()
+    
     """    
     train_idx, valid_idx, test_idx = torch.utils.data.random_split(
         range(len(dataset_tmp)), [train_size, valid_size, test_size]
@@ -403,7 +394,7 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     unique_ids = list(set(user_ids))  # Get unique IDs
     train_ids, temp_ids = train_test_split(unique_ids, test_size=round(1-train_rate,2), random_state=42)  # 60% train, 40% temp
     valid_ids, test_ids = train_test_split(temp_ids, test_size=test_rate, random_state=42)
-    train_idx, valid_idx, test_idx = group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids)
+    train_idx, valid_idx, test_idx = group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids, folder)
 
     # Prepare data for each split
     train_data_list = prepare_graph_data(train_idx, dataset, normalization)
@@ -431,6 +422,16 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     logger.info(f"Batch raw type: {type(batch.raw)}")
     logger.info(f"Batch has x attribute: {hasattr(batch, 'x')}")
 
+    logger.info(f"Shape of raw data after FFT: {raw[idx].shape}")
+    logger.info(f"Label of the first data point: {labels[idx]}")
+    plt.figure()
+    plt.plot(batch.x[0])
+    plt.title(f"Raw EEG data - Label: {batch.y[0]}")
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Amplitude")
+    plt.savefig("raw_eeg_example.png")
+    plt.close()
+            
     return trainloader, validloader, testloader
 
 
@@ -464,7 +465,12 @@ def prepare_graph_data(indices, dataset, normalization):
         assert x.dim() == 3, f"Expected 3D tensor, got {x.dim()}D"
         
         if normalization == 'minmax':
-            x = (raw - raw.min()) / (raw.max() - raw.min())
+            # create tensor with same shape as raw
+            x = torch.tensor(dataset.raw[idx]).float()
+            for i, ch in enumerate(raw):
+                ch = (ch - ch.min()) / (ch.max() - ch.min())
+                x[i] = ch
+            raw = x
         elif normalization == 'z':
             x = ((raw - raw.mean())/raw.std())
         elif normalization == 's':
@@ -474,8 +480,8 @@ def prepare_graph_data(indices, dataset, normalization):
             
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            #x=x, 
-            x = x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
+            x=x, 
+            #x = x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
             raw=raw,  # Custom attribute for raw data
             y=y,
             edge_index=edge_index

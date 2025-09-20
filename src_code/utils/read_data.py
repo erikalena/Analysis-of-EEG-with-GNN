@@ -260,7 +260,7 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
                     sample = data.get_data(i)[0]
                     eeg_data = sample[j*segment_length:(j+1)*segment_length] 
                     #raw_eeg.append(eeg_data)
-                    fft = np.fft.fft(eeg_data)[:200]
+                    fft = np.fft.fft(eeg_data)[:80]
                     raw_eeg.append(np.abs(fft))
 
                     if save_spec:
@@ -378,9 +378,9 @@ def build_dataloader(dataset: EEGDataset, batch_size: int, graph_path:str, train
     # normalize spectrograms and raw data
     for idx, _ in enumerate(dataset):
         spectrogram = torch.abs(dataset_tmp.spectrograms[idx])
-        #raw = dataset_tmp.raw[idx]
+        raw = dataset_tmp.raw[idx]
         dataset_tmp.spectrograms[idx] = (spectrogram - min_spectr) / (max_spectr - min_spectr)
-        #dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
+        dataset_tmp.raw[idx] = (raw - min_raw) / (max_raw - min_raw)
         
         if idx == 0:
             logger.info(f"Shape of raw data after FFT: {raw[idx].shape}")
@@ -462,7 +462,7 @@ def prepare_graph_data(indices, dataset, normalization):
         edge_index = dataset.edge_index[idx]
        
         assert x.dim() == 3, f"Expected 3D tensor, got {x.dim()}D"
-        
+        """
         if normalization == 'minmax':
             x = (raw - raw.min()) / (raw.max() - raw.min())
         elif normalization == 'z':
@@ -471,11 +471,11 @@ def prepare_graph_data(indices, dataset, normalization):
             x = ((raw - raw.mean(-1).unsqueeze(1))/raw.std(-1).unsqueeze(1))
         elif normalization == 'f':
             x = F.normalize(raw.x)
-            
+        """    
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            #x=x, 
-            x = x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
+            x=raw, 
+            #x = x.view(x.shape[0], -1),  # [20,30,200] -> [20,6000]
             raw=raw,  # Custom attribute for raw data
             y=y,
             edge_index=edge_index

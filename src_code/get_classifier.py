@@ -38,12 +38,12 @@ class Config:
     channels: list = field(default_factory=lambda: CHANNEL_NAMES) 
     input_data: int = None
     checkpoint_path: str = None              # e.g. './results_classifier/resnet18_20231119-152229'
-    optimizer: optim = optim.AdamW
+    optimizer: optim = optim.Adam
     learning_rate: float = 1e-3
     loss_fn: nn = nn.CrossEntropyLoss 
     batch_size: int = 256                
-    epochs: int = 50               
-    train_rate: float = 0.8
+    epochs: int = 100               
+    train_rate: float = 0.7
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
     n_cnn: int = 3                           # number of 1D convolutions to extract features from a signal, >=2
@@ -148,23 +148,23 @@ def run(dataset: EEGDataset):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ns', '--number_of_subjects', type=int, default=6, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='gnn', help='network type (shallownet, resnet18)')
+    parser.add_argument('-ns', '--number_of_subjects', type=int, default=36, help='number of subjects for which the correlation is computed')
+    parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
     parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
     parser.add_argument('-cp', '--checkpoint_path', type=str, default=None, help='path to the checkpoint to load')
-    parser.add_argument('--n_cnn', type=int, default=4, help='Number of 1D convolutions to extract features from a signal, >=2')
-    parser.add_argument('--n_mp', type=int, default=3, help='Hop distance in graph to collect information from, >=1')
+    parser.add_argument('--n_cnn', type=int, default=3, help='Number of 1D convolutions to extract features from a signal, >=2')
+    parser.add_argument('--n_mp', type=int, default=2, help='Hop distance in graph to collect information from, >=1')
     parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
     parser.add_argument('--d_hidden', type=int, default=64, help='Number of hidden channels of graph convolution layers')
     parser.add_argument('--d_latent', type=int, default=100, help='Number of features to extract from a EEG signal')
     parser.add_argument('--activation', type=str, default='relu', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
     parser.add_argument('--pooling', type=str, default='max', choices=['max', 'avg'], help='Pooling strategy to use, [Max, Average]')
-    parser.add_argument('--kernel_size', type=int, default=30)
+    parser.add_argument('--kernel_size', type=int, default=15)
     parser.add_argument('--norm_enc', type=int, default=1, choices=[0,1],)
-    parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
-    parser.add_argument('--p_dropout', type=float, default=0., help='Dropout probability')
+    parser.add_argument('--norm_proc', type=str, default='none', choices=['none', 'batch', 'graph', 'layer'],)
+    parser.add_argument('--p_dropout', type=float, default=0.3, help='Dropout probability')
     parser.add_argument('--normalization', type=str, default='minmax', choices=['minmax', 's', 'z', 'f'],)
     args = parser.parse_args()
     args.network_type = args.network_type.lower()

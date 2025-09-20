@@ -213,7 +213,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
     criterion = criterion.to(device)
     train_loader, val_loader, test_loader = dataloaders["train"], dataloaders["val"], dataloaders["test"]
     
-    early_stopper = EarlyStopper(patience=10, min_delta=0.001)
+    #early_stopper = EarlyStopper(patience=10, min_delta=0.001)
 
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
         # write header
@@ -242,7 +242,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
             optim.step()
 
             train_loss += loss.item()
-        
+        """
         model.eval()  # Before validation
         with torch.no_grad():
             for data in val_loader:
@@ -272,7 +272,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
             val_acc += int((pred == labels_y).sum())
             loss = criterion(out_y, labels_y) 
             val_loss += loss.item()
-        """
+        
         
         train_loss = train_loss / len(train_loader)
         val_loss = val_loss / len(val_loader)
@@ -284,13 +284,13 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
         with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'{epoch},{train_loss},{train_acc:.4f},')
             f.write(f'{val_loss},{val_acc:.4f}\n')
-            
+        """    
         # check if we need to early stop
         if early_stopper.early_stop(val_loss, epoch):
             with open(os.path.join(folder, 'results.txt'), 'a') as f:
                 f.write('Early stopping\n')
             break
-    
+        """
     logger.info("Testing the model...")
     model.eval()
     test_acc = test_eegcn(model, test_loader)

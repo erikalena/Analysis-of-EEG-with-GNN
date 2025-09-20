@@ -38,7 +38,7 @@ class Config:
     channels: list = field(default_factory=lambda: CHANNEL_NAMES) 
     input_data: int = None
     checkpoint_path: str = None              # e.g. './results_classifier/resnet18_20231119-152229'
-    optimizer: optim = optim.AdamW
+    optimizer: optim = optim.Adam
     learning_rate: float = 1e-3
     loss_fn: nn = nn.CrossEntropyLoss 
     batch_size: int = 16                
@@ -85,64 +85,81 @@ def run(dataset: EEGDataset):
     # build data loaders
     logger.info("Building data loaders...")
 
-    if CONFIG.checkpoint_path is not None:
-        # load dataloaders from file
-        file_dataloaders = CONFIG.checkpoint_path + '/dataloaders.pkl'
-        dataloaders = load_dataloaders(file_dataloaders)
-        trainloader, validloader, testloader = dataloaders['train'], dataloaders['val'], dataloaders['test']
-    else:
-        trainloader, validloader, testloader = build_dataloader(dataset, batch_size=CONFIG.batch_size, graph_path=CONFIG.graph_path, train_rate=CONFIG.train_rate, 
-                                                                valid_rate=CONFIG.valid_rate, shuffle=True, resample=False, normalization=CONFIG.normalization, folder=CONFIG.dir_path) 
-    dataloaders = {'train': trainloader, 'val': validloader, 'test': testloader}
-    
-    # get the first batch of the trainloader and print some information
-    batch = next(iter(trainloader))
-    spectrogram = batch.x[0]
-    logger.info(f'Spectrogram shape: {spectrogram.shape}')
-    logger.info(f'Min spectrogram: {torch.min(spectrogram)}')
-    logger.info(f'Max spectrogram: {torch.max(spectrogram)}')
-
-    # save dataloaders to file
-    file_dataloaders = CONFIG.dir_path + '/dataloaders.pkl'
-    save_dataloaders(dataloaders, file_dataloaders)
-
-    num_node_features = spectrogram.shape[0] 
-    # load model
-    if CONFIG.classification in ['ms', 'cq']:
-        num_classes = 2
-    else:
-        num_classes = 3
+    test_accuracies = [] # test accuracies wrt which subject is in test set
+    for i in range(CONFIG.number_of_subjects):
         
-    if CONFIG.network_type == 'gnn':
-        model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
-    else:
-        model = EEGCN(CONFIG)
+        if CONFIG.checkpoint_path is not None:
+            # load dataloaders from file
+            file_dataloaders = CONFIG.checkpoint_path + '/dataloaders.pkl'
+            dataloaders = load_dataloaders(file_dataloaders)
+            trainloader, validloader, testloader = dataloaders['train'], dataloaders['val'], dataloaders['test']
+        else:
+            trainloader, validloader, testloader = build_dataloader(dataset, test_idx = i, batch_size=CONFIG.batch_size, train_rate=CONFIG.train_rate, 
+                                                                    valid_rate=CONFIG.valid_rate, shuffle=True, normalization=CONFIG.normalization, folder=CONFIG.dir_path) 
+        dataloaders = {'train': trainloader, 'val': validloader, 'test': testloader}
+        
+        # get the first batch of the trainloader and print some information
+        batch = next(iter(trainloader))
+        x = batch.x[0]
+        logger.info(f'Spectrogram shape: {x.shape}')
+        logger.info(f'Min spectrogram: {torch.min(x)}')
+        logger.info(f'Max spectrogram: {torch.max(x)}')
 
-    # define loss function and optimizer
-    class_weights = get_weights(dataset, CONFIG.nclasses)
-    loss_fn = CONFIG.loss_fn(weight=class_weights, reduction='mean')
-    logger.info(f'Weights for each class: {class_weights}')
-    optimizer = CONFIG.optimizer(model.parameters(), lr=CONFIG.learning_rate, amsgrad=True, weight_decay=1e-4)
+        # save dataloaders to file
+        file_dataloaders = CONFIG.dir_path + '/dataloaders.pkl'
+        save_dataloaders(dataloaders, file_dataloaders)
+
+        num_node_features = x.shape[0] 
+        # load model
+        if CONFIG.classification in ['ms', 'cq']:
+            num_classes = 2
+        else:
+            num_classes = 3
+            
+        if CONFIG.network_type == 'gnn':
+            model = GCN(num_node_features, num_classes=num_classes, hidden_channels=64)
+        else:
+            model = EEGCN(CONFIG)
+
+        # define loss function and optimizer
+        class_weights = get_weights(dataset, CONFIG.nclasses)
+        loss_fn = CONFIG.loss_fn(weight=class_weights, reduction='mean')
+        logger.info(f'Weights for each class: {class_weights}')
+        optimizer = CONFIG.optimizer(model.parameters(), lr=CONFIG.learning_rate, amsgrad=True, weight_decay=1e-4)
+        
+        # train model
+        logger.info("Training the model...")
+        file_checkpoint = CONFIG.checkpoint_path + '/checkpoint.pt' if CONFIG.checkpoint_path is not None else None
+        load = True if CONFIG.checkpoint_path is not None and os.path.isfile(file_checkpoint) else False
+        if CONFIG.network_type == 'gnn':
+            model = train(model, optimizer, loss_fn, dataloaders, num_epochs=CONFIG.epochs, 
+                                folder=CONFIG.dir_path, load_checkpoint=load, 
+                                checkpoint_path=file_checkpoint, device=CONFIG.device)
+            # test the model
+            logger.info("Testing the model...")
+            test_acc = test(model, testloader, folder = CONFIG.dir_path)
+            logger.info(f'Test accuracy: {test_acc}')
+        else:
+            test_acc = train_eegcn(model, dataloaders, optimizer, loss_fn, CONFIG.epochs, CONFIG.device, folder=CONFIG.dir_path)
+
+        plot_training_results(f'{CONFIG.dir_path}/results.txt')
+        test_accuracies.append(test_acc)
+        
+    # save plot with test accuracies as histogram for each subject
+    if CONFIG.number_of_subjects > 1:
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.bar(range(len(test_accuracies)), test_accuracies, alpha=0.7, color='lightsteelblue')
+        plt.xlabel('Test Subject Index')
+        plt.ylabel('Test Accuracy')
+        plt.ylim(0, 1)
+        plt.xticks(range(len(test_accuracies)), [str(i) for i in range(len(test_accuracies))])
+        plt.title('Test Accuracies for Each Subject')
+        plt.savefig(f'{CONFIG.dir_path}/test_accuracies.png')
+        plt.close()
+        logger.info(f'Test accuracies for each subject: {test_accuracies}')
+        logger.info(f'Mean test accuracy: {np.mean(test_accuracies)}')
     
-    # train model
-    logger.info("Training the model...")
-    file_checkpoint = CONFIG.checkpoint_path + '/checkpoint.pt' if CONFIG.checkpoint_path is not None else None
-    load = True if CONFIG.checkpoint_path is not None and os.path.isfile(file_checkpoint) else False
-    if CONFIG.network_type == 'gnn':
-        model = train(model, optimizer, loss_fn, dataloaders, num_epochs=CONFIG.epochs, 
-                            folder=CONFIG.dir_path, load_checkpoint=load, 
-                            checkpoint_path=file_checkpoint, device=CONFIG.device)
-        # test the model
-        logger.info("Testing the model...")
-        test_acc = test(model, testloader, folder = CONFIG.dir_path)
-        logger.info(f'Test accuracy: {test_acc}')
-    else:
-        model = train_eegcn(model, dataloaders, optimizer, loss_fn, CONFIG.epochs, CONFIG.device, folder=CONFIG.dir_path)
-
-    plot_training_results(f'{CONFIG.dir_path}/results.txt')
-
-    
-
 
 
 if __name__ == "__main__":
@@ -154,14 +171,14 @@ if __name__ == "__main__":
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('-ch', '--channels', type=lambda s: [str(item).upper() for item in s.split(',')], default=CHANNEL_NAMES, help='channels for which to compute the masks')
     parser.add_argument('-cp', '--checkpoint_path', type=str, default=None, help='path to the checkpoint to load')
-    parser.add_argument('--n_cnn', type=int, default=4, help='Number of 1D convolutions to extract features from a signal, >=2')
-    parser.add_argument('--n_mp', type=int, default=4, help='Hop distance in graph to collect information from, >=1')
+    parser.add_argument('--n_cnn', type=int, default=3, help='Number of 1D convolutions to extract features from a signal, >=2')
+    parser.add_argument('--n_mp', type=int, default=2, help='Hop distance in graph to collect information from, >=1')
     parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
     parser.add_argument('--d_hidden', type=int, default=64, help='Number of hidden channels of graph convolution layers')
     parser.add_argument('--d_latent', type=int, default=100, help='Number of features to extract from a EEG signal')
     parser.add_argument('--activation', type=str, default='relu', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
     parser.add_argument('--pooling', type=str, default='max', choices=['max', 'avg'], help='Pooling strategy to use, [Max, Average]')
-    parser.add_argument('--kernel_size', type=int, default=30)
+    parser.add_argument('--kernel_size', type=int, default=15)
     parser.add_argument('--norm_enc', type=int, default=1, choices=[0,1],)
     parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
     parser.add_argument('--p_dropout', type=float, default=0.2, help='Dropout probability')

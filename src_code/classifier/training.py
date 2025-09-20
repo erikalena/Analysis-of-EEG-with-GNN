@@ -213,7 +213,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
     criterion = criterion.to(device)
     train_loader, val_loader, test_loader = dataloaders["train"], dataloaders["val"], dataloaders["test"]
     
-    early_stopper = EarlyStopper(patience=10, min_delta=0.001)
+    #early_stopper = EarlyStopper(patience=10, min_delta=0.001)
 
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
         # write header
@@ -262,43 +262,43 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
                     m.train()  # BN uses batch stats; dropout etc. remain disabled
 
         # before measuring validation acc
-        bn_train_eval(model) #if epoch < 20 else model.eval()
-        for data in val_loader:
-            data = data.to(model.device)
-            inputs = (data.x.float(), data.edge_index, None, data.batch)
-            labels_y = data.y.to(model.device)
-            out_y = model(*inputs)
-            pred = out_y.argmax(dim=1)  
-            val_acc += int((pred == labels_y).sum())
-            loss = criterion(out_y, labels_y) 
-            val_loss += loss.item()
-        
+        if val_loader is not None and len(val_loader) > 0:
+            bn_train_eval(model) #if epoch < 20 else model.eval()
+            for data in val_loader:
+                data = data.to(model.device)
+                inputs = (data.x.float(), data.edge_index, None, data.batch)
+                labels_y = data.y.to(model.device)
+                out_y = model(*inputs)
+                pred = out_y.argmax(dim=1)  
+                val_acc += int((pred == labels_y).sum())
+                loss = criterion(out_y, labels_y) 
+                val_loss += loss.item()
         
         train_loss = train_loss / len(train_loader)
-        val_loss = val_loss / len(val_loader)
+        val_loss = val_loss / len(val_loader) if val_loader is not None and len(val_loader) > 0 else 0
         train_acc = train_acc / len(train_loader.dataset)
-        val_acc = val_acc / len(val_loader.dataset)
-        logger.info(f"{len(train_loader)}, {len(val_loader)}")        
+        val_acc = val_acc / len(val_loader.dataset) if val_loader is not None and len(val_loader) > 0 else 0
+
         logger.info(f"Epoch: {epoch}, train accuracy: {train_acc:.2f}, val accuracy: {val_acc:.2f}")
         logger.info(f"Train loss: {train_loss:.2f}, lr: {optim.param_groups[0]['lr']}")
         with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'{epoch},{train_loss},{train_acc:.4f},')
             f.write(f'{val_loss},{val_acc:.4f}\n')
-            
+        """    
         # check if we need to early stop
         if early_stopper.early_stop(val_loss, epoch):
             with open(os.path.join(folder, 'results.txt'), 'a') as f:
                 f.write('Early stopping\n')
             break
-    
+        """
     logger.info("Testing the model...")
     model.eval()
     test_acc = test_eegcn(model, test_loader)
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'Test Acc: {test_acc:.4f}\n')
     logger.info(f"Test accuracy: {test_acc:.2f}")
-        
-
+    
+    return test_acc
     
 def apply_along_axis(function, x, axis: int = 0):
      return torch.stack([

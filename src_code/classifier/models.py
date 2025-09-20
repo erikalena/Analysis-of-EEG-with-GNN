@@ -295,7 +295,7 @@ class Potential(torch.nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(2*in_dim, in_dim)
         self.lnorm1 = LayerNorm(in_dim)
-        #self.res1 = nn.Linear(in_dim, in_dim//2)
+        self.res1 = nn.Linear(in_dim, in_dim//2)
         self.fc2 = nn.Linear(in_dim, in_dim//2)
         self.lnorm2 = LayerNorm(in_dim//2)
         self.fc3 = nn.Linear(in_dim//2, 10)
@@ -303,10 +303,10 @@ class Potential(torch.nn.Module):
        
     def forward(self, x):
         h = self.lnorm1(F.tanh(self.fc1(x))) 
-        #x = self.res1(x)
-        #h += x
+        x = self.res1(x)
+        h += x
         h = self.lnorm2(F.tanh(self.fc2(h)))
         h = self.fc3(h)
-        #x = self.res3(x)
-        #h += x
+        x = self.res3(x)
+        h += x
         return h

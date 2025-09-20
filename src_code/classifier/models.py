@@ -78,7 +78,7 @@ class Processor(torch.nn.Module):
         super(Processor, self).__init__()
         self.activation = get_activation(args)
         self.gconvs = nn.ModuleList([])
-        self.gconvs.append(GBlock(64, args.d_hidden, args.norm_proc, False))
+        self.gconvs.append(GBlock(24, args.d_hidden, args.norm_proc, False))
         self.gconvs += clones(GBlock(args.d_hidden, args.d_hidden, args.norm_proc, True), args.n_mp-2)
         self.gconvs.append(GBlock(args.d_hidden, args.d_hidden, args.norm_proc, False))
         self.dropout = nn.Dropout(args.p_dropout)

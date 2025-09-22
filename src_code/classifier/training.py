@@ -127,7 +127,8 @@ def train(model: torchvision.models, optimizer: torch.optim, criterion: torch.nn
             # statistics
             epoch_acc = test(model, dataloaders[phase], folder=None)
             epoch_loss = train_loss / size
-            logger.info(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+            if epoch%5 == 0:
+               logger.info(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
             # deep copy the model
             if phase == 'val' and epoch_acc > best_acc:
@@ -191,6 +192,72 @@ def test(model: torchvision.models, loader: DataLoader, folder: str = None):
 #################################
 
 
+@torch.no_grad()
+def eval_bce(loader, model, threshold=0.5, device="cuda"):
+    model.eval(); tot=0; correct=0
+    for data in loader:
+        data = data.to(device)
+        y   = data.y.to(device).float()
+        input = (data.x, data.edge_index, None, data.batch)          # adapt to your signature
+        out = model(*input)
+        logit = out.squeeze(-1)               # [B]
+
+        p = torch.sigmoid(logit)
+        pred = (p >= threshold).long()
+        correct += (pred == y).sum().item()
+        tot     += y.numel()
+
+    return correct / max(tot, 1)
+
+@torch.no_grad()
+def tune_threshold(val_loader, model, device="cuda", metric="f1"):
+    """
+    Returns (best_threshold, best_metric). Metric in {"f1","balanced_acc","accuracy"}.
+    """
+    model.eval()
+    if device is None:
+        device = next(model.parameters()).device
+
+    all_logits, all_targets = [], []
+    for data in val_loader:
+        data = data.to(model.device)
+        y = data.y.to(device).float()
+        input = (data.x, data.edge_index, None, data.batch)
+
+        out = model(*input)
+        logit = out.squeeze(-1)               # [B]
+        all_logits.append(logit.detach().cpu())
+        all_targets.append(y.detach().cpu())
+
+    logits = torch.cat(all_logits)            # [N]
+    y      = torch.cat(all_targets).long()    # [N]
+    p      = torch.sigmoid(logits)            # [N]
+
+    best_t, best_m = 0.5, -1.0
+    for t in torch.linspace(0.05, 0.95, steps=19):
+        pred = (p >= t).long()
+        tp = ((pred == 1) & (y == 1)).sum().item()
+        tn = ((pred == 0) & (y == 0)).sum().item()
+        fp = ((pred == 1) & (y == 0)).sum().item()
+        fn = ((pred == 0) & (y == 1)).sum().item()
+
+        if metric == "balanced_acc":
+            tpr = tp / (tp + fn + 1e-9)
+            tnr = tn / (tn + fp + 1e-9)
+            m = 0.5 * (tpr + tnr)
+        elif metric == "accuracy":
+            m = (tp + tn) / max(tp + tn + fp + fn, 1)
+        else:  # "f1"
+            prec = tp / (tp + fp + 1e-9)
+            rec  = tp / (tp + fn + 1e-9)
+            m = 2 * prec * rec / (prec + rec + 1e-9)
+
+        if m > best_m:
+            best_m, best_t = m, float(t)
+
+    return best_t, best_m
+
+
 def init_weights(m):
     if isinstance(m, nn.Linear):
         torch.nn.init.xavier_uniform_(m.weight)
@@ -212,7 +279,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
     model.device = device
     criterion = criterion.to(device)
     train_loader, val_loader, test_loader = dataloaders["train"], dataloaders["val"], dataloaders["test"]
-    
+    threshold = 0.4
     #early_stopper = EarlyStopper(patience=10, min_delta=0.001)
 
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
@@ -220,7 +287,6 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
         f.write(f'epoch,train_loss,train_acc,val_loss,val_acc\n')
         
     for epoch in range(epochs):  # loop over the dataset multiple times
-        model.train()
         train_acc, train_loss, val_acc, val_loss = 0., 0., 0., 0.
         model.train()
 
@@ -238,9 +304,7 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
             loss_aux = grads.square().mean()
             loss = criterion(out_y, labels_y) + 1e-3*loss_aux 
             loss.backward()
-
             optim.step()
-
             train_loss += loss.item()
         """
         model.eval()  # Before validation
@@ -262,8 +326,9 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
                     m.train()  # BN uses batch stats; dropout etc. remain disabled
 
         # before measuring validation acc
+        model.eval()
         if val_loader is not None and len(val_loader) > 0:
-            bn_train_eval(model) #if epoch < 20 else model.eval()
+            #bn_train_eval(model) #if epoch < 20 else model.eval()
             for data in val_loader:
                 data = data.to(model.device)
                 inputs = (data.x.float(), data.edge_index, None, data.batch)
@@ -278,9 +343,14 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
         val_loss = val_loss / len(val_loader) if val_loader is not None and len(val_loader) > 0 else 0
         train_acc = train_acc / len(train_loader.dataset)
         val_acc = val_acc / len(val_loader.dataset) if val_loader is not None and len(val_loader) > 0 else 0
-
-        logger.info(f"Epoch: {epoch}, train accuracy: {train_acc:.2f}, val accuracy: {val_acc:.2f}")
-        logger.info(f"Train loss: {train_loss:.2f}, lr: {optim.param_groups[0]['lr']}")
+       
+           
+        #threshold, _ = tune_threshold(train_loader, model, device)
+        #val_acc = eval_bce(train_loader, model, threshold, device=device)
+        
+        if epoch %5 == 0:
+           logger.info(f"Epoch: {epoch}, train accuracy: {train_acc:.2f}, val accuracy: {val_acc:.2f}")
+           logger.info(f"Train loss: {train_loss:.2f}, lr: {optim.param_groups[0]['lr']}")
         with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'{epoch},{train_loss},{train_acc:.4f},')
             f.write(f'{val_loss},{val_acc:.4f}\n')
@@ -293,10 +363,15 @@ def train_eegcn(model: torchvision.models, dataloaders: DataLoader, optim: torch
         """
     logger.info("Testing the model...")
     model.eval()
-    test_acc = test_eegcn(model, test_loader)
+    test_acc = test_eegcn(model, test_loader, threshold)
+    item = next(iter(test_loader))
+    logger.info(item[0].id)
     with open(os.path.join(folder, 'results.txt'), 'a') as f:
             f.write(f'Test Acc: {test_acc:.4f}\n')
     logger.info(f"Test accuracy: {test_acc:.2f}")
+
+    # save model parameters in folder
+    torch.save(model.state_dict(), os.path.join(folder, 'model.pt'))
     
     return test_acc
     
@@ -305,7 +380,7 @@ def apply_along_axis(function, x, axis: int = 0):
          function(x_i) for x_i in torch.unbind(x, dim=axis)
      ], dim=axis).to(x.device)
         
-def test_eegcn(model, loader):
+def test_eegcn(model, loader, threshold):
     model.eval() # set evaluation mode for the model
     def bn_train_eval(model):
         model.eval()

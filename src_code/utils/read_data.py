@@ -259,11 +259,12 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
                     if channel_list is not None and CHANNEL_NAMES[i] not in channel_list:
                         continue
                     sample = data.get_data(i)[0]
+                    # normalize sample
+                    sample = (sample - sample.min()) / (sample.max() - sample.min())
                     eeg_data = sample[j*segment_length:(j+1)*segment_length] 
-                    #raw_eeg.append(eeg_data)
-                    fft = np.fft.fft(eeg_data)[:80]
-                    fft = np.fft.fft(eeg_data)[:80]
-                    raw_eeg.append(np.abs(fft))
+                    raw_eeg.append(eeg_data)
+                    #fft = np.fft.fft(eeg_data)[:100]
+                    #raw_eeg.append(np.abs(fft))
 
                     if save_spec:
                         freqs = np.arange(0.5, 60, 2)
@@ -318,7 +319,6 @@ def group_split_indices(dataset_tmp, train_ids, valid_ids, test_ids, folder):
         f.write(f'TRAIN: {train_ids}\n')
         f.write(f'VAL: {valid_ids}\n')
         f.write(f'TEST: {test_ids}\n')
-
     return train_idx, valid_idx, test_idx
     
 
@@ -344,10 +344,15 @@ def build_dataloader(dataset: EEGDataset, test_idx: int, batch_size: int, train_
     spectrograms = [None]*len(dataset_tmp)
     raw = [None]*len(dataset_tmp)
     labels = [None]*len(dataset_tmp)
-    
+    logger.info(f"Raw has dimension: {np.array(dataset_tmp[0][1]).shape}")
+    #min_raw = min(torch.as_tensor(dataset_tmp[i][1]).min().item() for i in range(len(dataset_tmp)))
+    #max_raw = max(torch.as_tensor(dataset_tmp[i][1]).max().item() for i in range(len(dataset_tmp)))
+
+        
     for idx in range(len(dataset_tmp.raw)):
         spectrograms[idx] = torch.tensor(dataset_tmp.spectrograms[idx].real).float() if len(dataset_tmp.spectrograms) > 0  else dataset_tmp.spectrograms[idx]
         raw[idx] = torch.tensor(np.array(dataset_tmp.raw[idx])).float() 
+        #raw[idx] = (raw[idx] - min_raw)/(max_raw - min_raw)
         labels[idx] = torch.tensor(dataset_tmp.labels[idx]).long() 
     
     dataset_tmp.spectrograms = spectrograms
@@ -381,8 +386,8 @@ def build_dataloader(dataset: EEGDataset, test_idx: int, batch_size: int, train_
 
     # Create PyTorch Geometric DataLoaders
     trainloader = DataLoader(train_data_list, batch_size=batch_size, shuffle=shuffle)
-    validloader = DataLoader(valid_data_list, batch_size=batch_size, shuffle=shuffle) if valid_rate > 0 else None
-    testloader = DataLoader(test_data_list, batch_size=batch_size, shuffle=shuffle) if test_rate > 0 else None
+    validloader = DataLoader(valid_data_list, batch_size=batch_size, shuffle=shuffle)  if len(valid_data_list) > 0 else None
+    testloader = DataLoader(test_data_list, batch_size=batch_size, shuffle=shuffle)  if len(test_data_list) > 0 else None
 
     # Test the dataloader
     logger.info(f"Individual data object x shape: {train_data_list[0].x.shape if train_data_list[0].x is not None else 'None'}")
@@ -432,28 +437,33 @@ def prepare_graph_data(indices, dataset, normalization):
         raw = torch.tensor(np.array(dataset.raw[idx])).float()
         y = dataset.labels[idx]
         edge_index = dataset.edge_index[idx]
+        id = dataset.id[idx]
        
         assert x.dim() == 3, f"Expected 3D tensor, got {x.dim()}D"
-        
+        """
         if normalization == 'minmax':
+            ""
             # create tensor with same shape as raw
             x = torch.tensor(dataset.raw[idx]).float()
             for i, ch in enumerate(raw):
                 ch = (ch - ch.min()) / (ch.max() - ch.min())
                 x[i] = ch
+            ""
+            x = (raw - raw.min())/(raw.max() - raw.min())
         elif normalization == 'z':
             x = ((raw - raw.mean())/raw.std())
         elif normalization == 's':
             x = ((raw - raw.mean(-1).unsqueeze(1))/raw.std(-1).unsqueeze(1))
         elif normalization == 'f':
-            x = F.normalize(raw.x)
-           
+            x = F.normalize(raw)
+        """
         # Create PyTorch Geometric Data object
         data_obj = Data(
-            x=x, 
+            x=raw, 
             raw=raw,  # Custom attribute for raw data
             y=y,
-            edge_index=edge_index
+            edge_index=edge_index,
+            id=id
         )
         # Add any additional attributes if needed
         try:

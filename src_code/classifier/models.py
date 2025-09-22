@@ -44,7 +44,6 @@ def get_weights(dataset: EEGDataset, nclasses: int):
     proportional to the inverse of the number of samples
     """
     counts = [sum([1 for i, _ in enumerate(dataset) if dataset.get_label(i) == label]) for label in range(nclasses)]
-
     # compute class weights
     class_weights = [sum(counts)/(nclasses **2 * counts[i]) for i in range(nclasses)]
 
@@ -78,7 +77,7 @@ class Processor(torch.nn.Module):
         super(Processor, self).__init__()
         self.activation = get_activation(args)
         self.gconvs = nn.ModuleList([])
-        self.gconvs.append(GBlock(24, args.d_hidden, args.norm_proc, False))
+        self.gconvs.append(GBlock(800, args.d_hidden, args.norm_proc, False))
         self.gconvs += clones(GBlock(args.d_hidden, args.d_hidden, args.norm_proc, True), args.n_mp-2)
         self.gconvs.append(GBlock(args.d_hidden, args.d_hidden, args.norm_proc, False))
         self.dropout = nn.Dropout(args.p_dropout)
@@ -97,10 +96,13 @@ class Classifier(torch.nn.Module):
                        nn.LayerNorm(args.d_hidden//2),
                        nn.ReLU())
         self.linear = nn.Linear(args.d_hidden//2, args.nclasses)
-             
+         
+        # output a single value for binary classification
+        #self.linear = nn.Linear(args.d_hidden//2, 1)
+
     def forward(self, h):
         h = self.mlp(h)
-        return self.linear(h)
+        return self.linear(h) #.squeeze(-1)
                    
 class EEGCN(torch.nn.Module):
     def __init__(self, args):
@@ -193,7 +195,6 @@ class Block(nn.Module):
         self.inplace =False
         out = self.conv(x)
         out = self.norm(out)
-        #out = nn.Flatten()(out)
         out = self.relu(out)
         if self.skipcon:
             out = out + identity

@@ -33,16 +33,16 @@ class Config:
     pretrained: bool = False                 # use pretrained model
     nclasses: int = 2                        # number of classes
     nelectrodes: int = len(CHANNEL_NAMES)    # total number of electrodes available
-    timewindow: float = 1                  # time window for the spectrogram
+    timewindow: float = 5                    # time window for the spectrogram
     input_channels: int = len(CHANNEL_NAMES) # number of input channels
     channels: list = field(default_factory=lambda: CHANNEL_NAMES) 
     input_data: int = None
     checkpoint_path: str = None              # e.g. './results_classifier/resnet18_20231119-152229'
-    optimizer: optim = optim.Adam
-    learning_rate: float = 1e-3
+    optimizer: optim = optim.AdamW
+    learning_rate: float = 1e-2 #1e-3
     loss_fn: nn = nn.CrossEntropyLoss 
-    batch_size: int = 16                
-    epochs: int = 5               
+    batch_size: int = 128                
+    epochs: int = 80 #100               
     train_rate: float = 0.8
     valid_rate: float = 0.1
     graph_path: str = GRAPH_PATH
@@ -55,7 +55,7 @@ class Config:
     pooling: str = 'max'                     # pooling strategy to use, [Max, Average]
     kernel_size: int = 15                    # kernel size for the 1D convolutions
     norm_enc: int = 0                        # whether to use batch normalization after each 1D convolution (1) or not (0)
-    norm_proc: str = 'batch'                 # normalization for the processing layers, [none, batch, graph, layer]
+    norm_proc: str = 'graph'                 # normalization for the processing layers, [none, batch, graph, layer]
     p_dropout: float = 0.0                   # dropout probability
     normalization: str = 'minmax'            # normalization for the input data
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -98,6 +98,7 @@ def run(dataset: EEGDataset):
                                                                     valid_rate=CONFIG.valid_rate, shuffle=True, normalization=CONFIG.normalization, folder=CONFIG.dir_path) 
         dataloaders = {'train': trainloader, 'val': validloader, 'test': testloader}
         
+        logger.info(f'TEST LOADER {len(testloader)}')        
         # get the first batch of the trainloader and print some information
         batch = next(iter(trainloader))
         x = batch.x[0]
@@ -123,8 +124,20 @@ def run(dataset: EEGDataset):
 
         # define loss function and optimizer
         class_weights = get_weights(dataset, CONFIG.nclasses)
+        #class_weights[1] = 2.5
         loss_fn = CONFIG.loss_fn(weight=class_weights, reduction='mean')
+        labels = []
+        for batch in trainloader:
+            labels += batch.y.tolist()
+ 
+        #pos = (sum(labels) if CONFIG.nclasses == 2 else (np.array(labels) == 1).sum())
+        #neg = (len(labels) - pos if CONFIG.nclasses == 2 else (np.array(labels) != 1).sum())
+        #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        #pos_weights = torch.tensor([neg/ (pos + 1e-8)], device=device) #(neg*3)/ (pos + 1e-8)], device=device)  # shape [1]
+        
+        loss_fn = CONFIG.loss_fn(weight=class_weights, reduction='mean') #CONFIG.loss_fn(weight=class_weights, reduction='mean')
         logger.info(f'Weights for each class: {class_weights}')
+        #logger.info(f'Weights for each class: {class_weights}')
         optimizer = CONFIG.optimizer(model.parameters(), lr=CONFIG.learning_rate, amsgrad=True, weight_decay=1e-4)
         
         # train model
@@ -148,8 +161,8 @@ def run(dataset: EEGDataset):
     # save plot with test accuracies as histogram for each subject
     if CONFIG.number_of_subjects > 1:
         import matplotlib.pyplot as plt
-        plt.figure()
-        plt.bar(range(len(test_accuracies)), test_accuracies, alpha=0.7, color='lightsteelblue')
+        plt.figure(figsize=(15,8))
+        plt.bar(range(len(test_accuracies)), test_accuracies, alpha=0.7, color='cadetblue')
         plt.xlabel('Test Subject Index')
         plt.ylabel('Test Accuracy')
         plt.ylim(0, 1)
@@ -159,13 +172,18 @@ def run(dataset: EEGDataset):
         plt.close()
         logger.info(f'Test accuracies for each subject: {test_accuracies}')
         logger.info(f'Mean test accuracy: {np.mean(test_accuracies)}')
-    
+
+    # save results in a text file
+    with open(f'{CONFIG.dir_path}/final_results.txt', 'w') as f:
+        f.write(f'Test accuracies for each subject: {test_accuracies}\n')
+        f.write(f'Mean test accuracy: {np.mean(test_accuracies)}\n')
+        f.write(f'Standard deviation of test accuracies: {np.std(test_accuracies)}\n')
 
 
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ns', '--number_of_subjects', type=int, default=6, help='number of subjects for which the correlation is computed')
+    parser.add_argument('-ns', '--number_of_subjects', type=int, default=36, help='number of subjects for which the correlation is computed')
     parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
     parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
@@ -176,12 +194,12 @@ if __name__ == "__main__":
     parser.add_argument('--aggregate', type=str, default='mean', choices=['none', 'eq', 'mean', 'max'],)
     parser.add_argument('--d_hidden', type=int, default=64, help='Number of hidden channels of graph convolution layers')
     parser.add_argument('--d_latent', type=int, default=100, help='Number of features to extract from a EEG signal')
-    parser.add_argument('--activation', type=str, default='relu', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
+    parser.add_argument('--activation', type=str, default='tanh', choices=['leaky_relu', 'relu', 'tanh'], help='Activation function to use, [Leaky ReLU, ReLU, Tanh]')
     parser.add_argument('--pooling', type=str, default='max', choices=['max', 'avg'], help='Pooling strategy to use, [Max, Average]')
-    parser.add_argument('--kernel_size', type=int, default=15)
+    parser.add_argument('--kernel_size', type=int, default=30)
     parser.add_argument('--norm_enc', type=int, default=1, choices=[0,1],)
     parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
-    parser.add_argument('--p_dropout', type=float, default=0.2, help='Dropout probability')
+    parser.add_argument('--p_dropout', type=float, default=0.1, help='Dropout probability')
     parser.add_argument('--normalization', type=str, default='minmax', choices=['minmax', 's', 'z', 'f'],)
     args = parser.parse_args()
     args.network_type = args.network_type.lower()
@@ -202,10 +220,20 @@ if __name__ == "__main__":
     dataset = read_eeg_data(DATA_FOLDER, DATASET_FOLDER, input_channels=CONFIG.input_channels, 
                             number_of_subjects=CONFIG.number_of_subjects, type = CONFIG.classification, 
                             channel_list = CONFIG.channels, time_window = CONFIG.timewindow)
-    
-        
+    """
+    # add a certain number of samples (all zeros) to the dataset with label 2 (fictitious class)
+    for i in range(120):
+        dataset.spectrograms.append(np.zeros(dataset.spectrograms[0].shape))
+        dataset.labels.append(1)
+        dataset.raw = list(dataset.raw)
+        dataset.raw.append(np.array(dataset.raw[0]) + 0.01*np.random.randn(*np.array(dataset.raw[0]).shape))
+        dataset.edge_index.append(dataset.edge_index[0])
+        dataset.channel.append(list(dataset.channel[0]))
+        dataset.id.append(list(dataset.id[0]))
+        #CONFIG.nclasses = 3
+    """
+
     CONFIG.dataset_size = len(dataset)
-    logger.info(dataset.spectrograms[0].shape)
     logger.info(f'Dataset length: {len(dataset)}')
     logger.info(f'Unique labels: {np.unique(dataset.labels)}')
     

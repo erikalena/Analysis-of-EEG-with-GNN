@@ -1,4 +1,4 @@
-# Analysis-of-EEG-with-GNN
+# Analysis of EEG using GNN
 
 This project explores EEG classification using Graph Neural Networks (GNNs), focusing on distinguishing rest vs. computation states and analyzing solver performance. Subject-specific models and a global model were trained, with edge masks learned to highlight class-relevant brain connectivity. 
 

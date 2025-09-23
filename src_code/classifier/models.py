@@ -50,6 +50,9 @@ def get_weights(dataset: EEGDataset, nclasses: int):
     return torch.tensor(class_weights).float()
 
 
+########################################################################
+## EEGCN (credits: https://github.com/maxxxzdn/EEGCN/tree/main)
+#########################################################################
             
 class Encoder(torch.nn.Module):
     def __init__(self, args):
@@ -100,7 +103,8 @@ class Classifier(torch.nn.Module):
     def forward(self, h):
         h = self.mlp(h)
         return self.linear(h) 
-                   
+
+
 class EEGCN(torch.nn.Module):
     def __init__(self, args):
         super(EEGCN, self).__init__() 

@@ -263,8 +263,6 @@ def read_eeg_data(folder: str, data_path: str, input_channels: int, number_of_su
                     sample = (sample - sample.min()) / (sample.max() - sample.min())
                     eeg_data = sample[j*segment_length:(j+1)*segment_length] 
                     raw_eeg.append(eeg_data)
-                    #fft = np.fft.fft(eeg_data)[:100]
-                    #raw_eeg.append(np.abs(fft))
 
                     if save_spec:
                         freqs = np.arange(0.5, 60, 2)
@@ -345,14 +343,10 @@ def build_dataloader(dataset: EEGDataset, test_idx: int, batch_size: int, train_
     raw = [None]*len(dataset_tmp)
     labels = [None]*len(dataset_tmp)
     logger.info(f"Raw has dimension: {np.array(dataset_tmp[0][1]).shape}")
-    #min_raw = min(torch.as_tensor(dataset_tmp[i][1]).min().item() for i in range(len(dataset_tmp)))
-    #max_raw = max(torch.as_tensor(dataset_tmp[i][1]).max().item() for i in range(len(dataset_tmp)))
 
-        
     for idx in range(len(dataset_tmp.raw)):
         spectrograms[idx] = torch.tensor(dataset_tmp.spectrograms[idx].real).float() if len(dataset_tmp.spectrograms) > 0  else dataset_tmp.spectrograms[idx]
         raw[idx] = torch.tensor(np.array(dataset_tmp.raw[idx])).float() 
-        #raw[idx] = (raw[idx] - min_raw)/(max_raw - min_raw)
         labels[idx] = torch.tensor(dataset_tmp.labels[idx]).long() 
     
     dataset_tmp.spectrograms = spectrograms
@@ -363,11 +357,9 @@ def build_dataloader(dataset: EEGDataset, test_idx: int, batch_size: int, train_
     user_ids = [id[0].split('_')[0] for id in dataset_tmp.id]
     
     unique_ids = list(set(user_ids))  # Get unique IDs
-    #train_ids, temp_ids = train_test_split(unique_ids, test_size=round(1-train_rate,2), random_state=42)  # 60% train, 40% temp
-    #valid_ids, test_ids = train_test_split(temp_ids, test_size=test_rate, random_state=42)
     
     #train_ids are all but test_id
-    test_ids = [f'Subject{test_idx:02d}']
+    test_ids = [f'Subject{test_idx:02d}'] if test_idx else []
     train_ids = [id for id in unique_ids if id not in test_ids]
     valid_ids = []
     valid_rate = 0.0
@@ -440,23 +432,7 @@ def prepare_graph_data(indices, dataset, normalization):
         id = dataset.id[idx]
        
         assert x.dim() == 3, f"Expected 3D tensor, got {x.dim()}D"
-        """
-        if normalization == 'minmax':
-            ""
-            # create tensor with same shape as raw
-            x = torch.tensor(dataset.raw[idx]).float()
-            for i, ch in enumerate(raw):
-                ch = (ch - ch.min()) / (ch.max() - ch.min())
-                x[i] = ch
-            ""
-            x = (raw - raw.min())/(raw.max() - raw.min())
-        elif normalization == 'z':
-            x = ((raw - raw.mean())/raw.std())
-        elif normalization == 's':
-            x = ((raw - raw.mean(-1).unsqueeze(1))/raw.std(-1).unsqueeze(1))
-        elif normalization == 'f':
-            x = F.normalize(raw)
-        """
+        
         # Create PyTorch Geometric Data object
         data_obj = Data(
             x=raw, 

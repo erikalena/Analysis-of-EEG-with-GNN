@@ -96,13 +96,10 @@ class Classifier(torch.nn.Module):
                        nn.LayerNorm(args.d_hidden//2),
                        nn.ReLU())
         self.linear = nn.Linear(args.d_hidden//2, args.nclasses)
-         
-        # output a single value for binary classification
-        #self.linear = nn.Linear(args.d_hidden//2, 1)
 
     def forward(self, h):
         h = self.mlp(h)
-        return self.linear(h) #.squeeze(-1)
+        return self.linear(h) 
                    
 class EEGCN(torch.nn.Module):
     def __init__(self, args):

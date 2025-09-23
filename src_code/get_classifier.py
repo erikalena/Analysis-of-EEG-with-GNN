@@ -6,7 +6,6 @@ import argparse
 import torch.nn as nn
 import torch.optim as optim
 from dataclasses import dataclass, field
-
 from utils.utils import logger, load_dataloaders, save_dataloaders
 from utils.read_data import CHANNEL_NAMES, read_eeg_data, build_dataloader, EEGDataset
 from utils.plot_functions import get_confusion_matrix, plot_training_results
@@ -220,18 +219,6 @@ if __name__ == "__main__":
     dataset = read_eeg_data(DATA_FOLDER, DATASET_FOLDER, input_channels=CONFIG.input_channels, 
                             number_of_subjects=CONFIG.number_of_subjects, type = CONFIG.classification, 
                             channel_list = CONFIG.channels, time_window = CONFIG.timewindow)
-    """
-    # add a certain number of samples (all zeros) to the dataset with label 2 (fictitious class)
-    for i in range(120):
-        dataset.spectrograms.append(np.zeros(dataset.spectrograms[0].shape))
-        dataset.labels.append(1)
-        dataset.raw = list(dataset.raw)
-        dataset.raw.append(np.array(dataset.raw[0]) + 0.01*np.random.randn(*np.array(dataset.raw[0]).shape))
-        dataset.edge_index.append(dataset.edge_index[0])
-        dataset.channel.append(list(dataset.channel[0]))
-        dataset.id.append(list(dataset.id[0]))
-        #CONFIG.nclasses = 3
-    """
 
     CONFIG.dataset_size = len(dataset)
     logger.info(f'Dataset length: {len(dataset)}')

@@ -109,47 +109,35 @@ def infer_edge_mask(model, dataset, batch_size, num_iters=500, lr=0.01, l1_coeff
     model.eval()
     device = device if device is not None else next(model.parameters()).device
     dataloader, _, _ = build_dataloader(dataset, test_idx=None, batch_size=batch_size, shuffle=False, train_rate=1.0, valid_rate=0.0, folder=folder)
+
     for iteration in tqdm(range(num_iters)):
         for data in dataloader:
             x, y = data.x, data.y
             edge_index = data.edge_index
             x = x.to(device)
             edge_index = edge_index.to(device)
-
             # verify that the instance is correctly classified
             with torch.no_grad():
                 logits = model(x, edge_index)
                 if isinstance(logits, (tuple, list)):
                     logits = logits[0]
                 pred_class = logits.argmax(dim=-1).item()
-
-
             num_edges = edge_index.size(1)
             num_nodes = int(data.x.shape[0]/batch_size)
-
             # Initialize edge mask parameters
-            edge_mask_param = torch.nn.Parameter(torch.randn(num_edges, device=device) * 0.1)
+            edge_mask_param = torch.nn.Parameter(torch.randn(num_edges, device=device) * 1.)
             optimizer = torch.optim.Adam([edge_mask_param], lr=lr)
-
             # Convert edge mask parameters to [0,1] probabilities
             edge_mask = torch.sigmoid(edge_mask_param)
 
-            # Use Gumbel sampling for differentiable edge selection
-            edge_probs = edge_mask.unsqueeze(0)  # (1, E)
-            gumbel_noise = -torch.log(-torch.log(torch.rand_like(edge_probs) + 1e-20) + 1e-20)
-            edge_logits = torch.log(edge_probs + 1e-20) + gumbel_noise
-            hard_mask = torch.sigmoid(edge_logits / 0.1)  # temperature=0.1 for sharp selection
+            # Use continuous edge weights instead of hard edge selection
+            #edge_weights = soft_weights.squeeze()  # Convert to 1D tensor for edge weights
+            edge_weights = edge_mask  # Direct use of sigmoid output
 
-            # Apply hard mask to create subgraph
-            selected_edges = (hard_mask.squeeze() > 0.5)
-            if selected_edges.sum() > 0:
-                sub_edge_index = edge_index[:, selected_edges]
-                inputs = (data.x.float(), sub_edge_index, None, data.batch)
-                labels_y = data.y.to(device)
-                logits = model(*inputs)
-            else:
-                # If no edges selected, return zero logits
-                logits = torch.zeros(1, model.num_classes if hasattr(model, 'num_classes') else 10, device=device)
+            # Pass all edges with their corresponding weights to the model
+            inputs = (data.x.float(), edge_index, edge_weights, data.batch)
+            labels_y = data.y.to(device)
+            logits = model(*inputs)
 
             labels_y = torch.ones(logits.shape)
             target_loss = F.cross_entropy(logits, labels_y)
@@ -160,32 +148,29 @@ def infer_edge_mask(model, dataset, batch_size, num_iters=500, lr=0.01, l1_coeff
             # Make symmetric for undirected graphs
             adj_mask = (adj_mask + adj_mask.T) / 2
             tv_loss = tv_coeff * tv_2d(adj_mask)
-
             total_loss = target_loss + sparsity_loss + tv_loss
-
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
-
         if iteration % 1 == 0:
             with torch.no_grad():
                 pred_class = logits.argmax(dim=-1).item()
+                logger.info(edge_weights)
                 logger.info(f"Iter {iteration}: Loss={total_loss:.4f}, "
-                      f"Target Loss={target_loss:.4f}, Sparsity={sparsity_loss:.4f}, "
-                      f"TV={tv_loss:.4f}, Pred={pred_class}, "
-                      f"Edges kept={edge_mask.mean().item():.3f}")
+                    f"Target Loss={target_loss:.4f}, Sparsity={sparsity_loss:.4f}, "
+                    f"TV={tv_loss:.4f}, Pred={pred_class}, "
+                    f"Edges kept={edge_mask.mean().item():.3f}")
 
     # Final results
     with torch.no_grad():
-        final_edge_mask = torch.sigmoid(edge_mask_param)
+        final_edge_weights = edge_weights
 
-        # Create thresholded edge index (keep edges with mask > 0.5)
-        keep_edges = final_edge_mask > 0.5
-        masked_edge_index = edge_index[:, keep_edges] if keep_edges.sum() > 0 else torch.empty((2, 0), device=device, dtype=edge_index.dtype)
+        # Optional: Count significant edges (those with weight > threshold for reporting)
+        significant_edges = (final_edge_weights > 0.5).sum().item()
+        logger.info(f"Final: {significant_edges}/{num_edges} edges with weight > 0.5")
+        logger.info(f"Mean edge weight: {final_edge_weights.mean().item():.4f}")
 
-        logger.info(f"Final: {keep_edges.sum().item()}/{num_edges} edges kept")
-
-    return final_edge_mask.detach(), masked_edge_index
+    return final_edge_weights
 
 
 if __name__ == "__main__":
@@ -235,10 +220,10 @@ if __name__ == "__main__":
 
 
     # learn masks for class 0 and class 1
-    mask0, _ = infer_edge_mask(model, dataset_class_1, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
-    mask1, _ = infer_edge_mask(model, dataset_class_0, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
+    mask0 = infer_edge_mask(model, dataset_class_1, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
+    mask1 = infer_edge_mask(model, dataset_class_0, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
 
 
     # save masks to file
-    np.savetxt(f'{CONFIG.classification}_mask_class_0.txt', mask0.numpy(), delimiter=',')
-    np.savetxt(f'{CONFIG.classification}_mask_class_1.txt', mask1.numpy(), delimiter=',')
+    np.savetxt('cq2_mask_class_0.txt', mask0.numpy(), delimiter=',')
+    np.savetxt('cq2_mask_class_1.txt', mask1.numpy(), delimiter=',')

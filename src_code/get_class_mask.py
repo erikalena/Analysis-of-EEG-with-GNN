@@ -1,17 +1,19 @@
+import os
 import numpy as np
 import datetime
 import argparse
+from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 from classifier.models import EEGCN
 from dataclasses import dataclass, field
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 from utils.utils import logger
-from utils.read_data import read_eeg_data, build_dataloader, EEGDataset, CHANNEL_NAMES
+from utils.read_data import read_eeg_data, build_dataloader, CHANNEL_NAMES
 
-COUNT_QUALITY = [0,1,1,1,0,1,0,1,1,0,0,1,1,1,0,1,1,1,1,0,1,0,0,1,1,1,1,1,1,1,0,1,1,1,1,1]
+ 
 DATA_FOLDER = '../eeg_data/'            # folder where the dataset is stored
+with open(os.path.join(DATA_FOLDER, 'subject-info.csv'), 'r') as csv:
+    COUNT_QUALITY = [line.strip().split(',')[-1] for line in csv.readlines()][1:]
 DATASET_FOLDER = './saved_datasets/'    # folder where to save the dataset
 RESULTS_FOLDER = './results_classifier/' # folder where to save the results
 
@@ -58,8 +60,6 @@ def guess_target(model, x, edge_index):
     Get the predicted class for the input graph.
     """
     out = model(x, edge_index)
-    #if isinstance(out, (tuple, list)):  # some models return (logits, att_adj)
-    #    out = out[0]
     return out.argmax(dim=-1).item()
 
 def tv_2d(m):
@@ -70,115 +70,91 @@ def tv_2d(m):
     tv_v = (m[1:, :] - m[:-1, :]).abs().mean()
     return tv_h + tv_v
 
-def edge_index_to_adj(edge_index, num_nodes, device=None):
-    """
-    Convert edge_index to adjacency matrix
-    """
-    if device is None:
-        device = edge_index.device
-    adj = torch.zeros(num_nodes, num_nodes, device=device)
-    adj[edge_index[0], edge_index[1]] = 1.0
-    return adj
 
-def adj_to_edge_index(adj, threshold=1e-6):
-    """
-    Convert adjacency matrix to edge_index, filtering by threshold
-    """
-    rows, cols = torch.where(adj > threshold)
-    return torch.stack([rows, cols], dim=0)
 
-def infer_edge_mask(model, dataset, batch_size, num_iters=500, lr=0.01, l1_coeff=0.5, tv_coeff=0.2, device=None, folder=None):
+def infer_edge_mask(model, dataset, batch_size, num_iters=500, lr=0.01, l1_coeff=0.1, tv_coeff=0.2, device=None, folder=None):
     """
     The objective is to learn a minimal subgraph
     which maintains the same classification.
 
     input:
-        model: The graph neural network model
+        model: the pretrained EEGCN model
         dataset: A list of (x, y) tuples representing the graphs
-        target_class: Target class to maintain (if None, use model's prediction)
-        num_iters: Number of optimization iterations
+        batch_size: batch size established for dataloader
+        num_iters: number of optimization iterations
         lr: Learning rate
         l1_coeff: Coefficient for sparsity regularization
         tv_coeff: Coefficient for total variation regularization
         device: Device to run on
 
     output:
-        final_edge_mask (E,): Continuous edge importance scores in [0,1] for each original edge
-        masked_edge_index (2, E'): Binary subgraph containing only edges with mask > 0.5
+        edge_weights: mask weights for graph's edges
     """
     model.eval()
     device = device if device is not None else next(model.parameters()).device
     dataloader, _, _ = build_dataloader(dataset, test_idx=None, batch_size=batch_size, shuffle=False, train_rate=1.0, valid_rate=0.0, folder=folder)
 
+    data = next(iter(dataloader))
+    edge_index = data.edge_index
+    num_edges = edge_index.size(1)
+    edge_mask_param = torch.nn.Parameter(torch.randn(num_edges, device=device))
+    optimizer = torch.optim.Adam([edge_mask_param], lr=lr)
+
     for iteration in tqdm(range(num_iters)):
         for data in dataloader:
-            x, y = data.x, data.y
+            x = data.x
             edge_index = data.edge_index
             x = x.to(device)
             edge_index = edge_index.to(device)
-            # verify that the instance is correctly classified
             with torch.no_grad():
                 logits = model(x, edge_index)
                 if isinstance(logits, (tuple, list)):
                     logits = logits[0]
                 pred_class = logits.argmax(dim=-1).item()
-            num_edges = edge_index.size(1)
-            num_nodes = int(data.x.shape[0]/batch_size)
-            # Initialize edge mask parameters
-            edge_mask_param = torch.nn.Parameter(torch.randn(num_edges, device=device) * 1.)
-            optimizer = torch.optim.Adam([edge_mask_param], lr=lr)
-            # Convert edge mask parameters to [0,1] probabilities
-            edge_mask = torch.sigmoid(edge_mask_param)
 
-            # Use continuous edge weights instead of hard edge selection
-            #edge_weights = soft_weights.squeeze()  # Convert to 1D tensor for edge weights
-            edge_weights = edge_mask  # Direct use of sigmoid output
+            # convert edge mask parameters to [0,1] probabilities
+            edge_weights = torch.sigmoid(edge_mask_param)
 
             # Pass all edges with their corresponding weights to the model
             inputs = (data.x.float(), edge_index, edge_weights, data.batch)
             labels_y = data.y.to(device)
             logits = model(*inputs)
 
-            labels_y = torch.ones(logits.shape)
+            #labels_y = torch.ones(logits.shape)
             target_loss = F.cross_entropy(logits, labels_y)
-            sparsity_loss = l1_coeff * edge_mask.mean()  # Encourage fewer edges
-            # For TV regularization, convert edge mask to adjacency matrix
+            sparsity_loss = l1_coeff * edge_weights.mean()
+            
+            # for TV regularization, convert edge mask to adjacency matrix
+            num_nodes = int(data.x.shape[0]/batch_size)
             adj_mask = torch.zeros(num_nodes, num_nodes, device=device)
-            adj_mask[edge_index[0], edge_index[1]] = edge_mask
-            # Make symmetric for undirected graphs
+            adj_mask[edge_index[0], edge_index[1]] = edge_weights
+            # make symmetric for undirected graphs
             adj_mask = (adj_mask + adj_mask.T) / 2
             tv_loss = tv_coeff * tv_2d(adj_mask)
             total_loss = target_loss + sparsity_loss + tv_loss
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
-        if iteration % 1 == 0:
+
+        if iteration % 5 == 0:
             with torch.no_grad():
                 pred_class = logits.argmax(dim=-1).item()
-                logger.info(edge_weights)
                 logger.info(f"Iter {iteration}: Loss={total_loss:.4f}, "
                     f"Target Loss={target_loss:.4f}, Sparsity={sparsity_loss:.4f}, "
                     f"TV={tv_loss:.4f}, Pred={pred_class}, "
-                    f"Edges kept={edge_mask.mean().item():.3f}")
+                    f"Edges kept={edge_weights.mean().item():.3f}")
 
-    # Final results
-    with torch.no_grad():
-        final_edge_weights = edge_weights
+    significant_edges = (edge_weights > 0.5).sum().item()
+    logger.info(f"Final: {significant_edges}/{num_edges} edges with weight > 0.5")
+    logger.info(f"Mean edge weight: {edge_weights.mean().item():.4f}")
 
-        # Optional: Count significant edges (those with weight > threshold for reporting)
-        significant_edges = (final_edge_weights > 0.5).sum().item()
-        logger.info(f"Final: {significant_edges}/{num_edges} edges with weight > 0.5")
-        logger.info(f"Mean edge weight: {final_edge_weights.mean().item():.4f}")
-
-    return final_edge_weights
+    return edge_weights.detach()
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ns', '--number_of_subjects', type=int, default=36, help='number of subjects for which the correlation is computed')
-    parser.add_argument('-nt', '--network_type', type=str, default='eegcn', help='network type (shallownet, resnet18)')
-    parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms, both)')
+    parser.add_argument('-ns', '--number_of_subjects', type=int, default=6, help='number of subjects for which the correlation is computed')
+    parser.add_argument('-ct', '--classification', type=str, default='ms', help='classification type (cq, ms)')
     parser.add_argument('-ic', '--input_channels', type=int, default=len(CHANNEL_NAMES), help='number of channels in dataitem')
     parser.add_argument('--n_cnn', type=int, default=3, help='Number of 1D convolutions to extract features from a signal, >=2')
     parser.add_argument('--n_mp', type=int, default=1, help='Hop distance in graph to collect information from, >=1')
@@ -192,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument('--norm_proc', type=str, default='graph', choices=['none', 'batch', 'graph', 'layer'],)
     parser.add_argument('--p_dropout', type=float, default=0.2, help='Dropout probability')
     args = parser.parse_args()
+    args.nclasses = 2
 
     # initialize configuration parameters
     CONFIG = Config(**args.__dict__)
@@ -203,7 +180,8 @@ if __name__ == "__main__":
     dataset = read_eeg_data(DATA_FOLDER, DATASET_FOLDER, input_channels=CONFIG.input_channels,
                             number_of_subjects=CONFIG.number_of_subjects, type = CONFIG.classification,
                             channel_list = CONFIG.channels, time_window = CONFIG.timewindow)
-
+    
+    # split dataset with respect to the two classes
     dataset_class_0 = dataset.select_class(0)
     dataset_class_1 = dataset.select_class(1)
     logger.info(f'Size of class 1 dataset: {len(dataset_class_1)}')
@@ -215,15 +193,14 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load(f'{training_folder}/model.pt'))
     model.eval()
 
+    # load graph edges from txt file
     edge_index = np.loadtxt('../graph_montage.txt', delimiter=',')
     edge_index = torch.tensor(edge_index).long()
-
 
     # learn masks for class 0 and class 1
     mask0 = infer_edge_mask(model, dataset_class_1, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
     mask1 = infer_edge_mask(model, dataset_class_0, batch_size=CONFIG.batch_size, num_iters=30, folder=DATASET_FOLDER)
 
-
     # save masks to file
-    np.savetxt('cq2_mask_class_0.txt', mask0.numpy(), delimiter=',')
-    np.savetxt('cq2_mask_class_1.txt', mask1.numpy(), delimiter=',')
+    np.savetxt(f'{CONFIG.classification}_mask_class_0.txt', mask0.numpy(), delimiter=',')
+    np.savetxt(f'{CONFIG.classification}_mask_class_1.txt', mask1.numpy(), delimiter=',')
